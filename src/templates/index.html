@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Melbete Bingo</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/css/style.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/gameselect.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/inbox.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-fonts.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-theme.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-premium.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-footer.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-cosmic.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-roundA.css?v={{ APP_VERSION }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+</head>
+<body>
+<div id="app-shell">
+
+  <!-- The shared hub header - the ONE place the profile/wallet lives
+       (deposit, withdraw, history, referral - all account-level, not
+       specific to any game), plus the withdrawable balance. Every game's own
+       header is informational-only for balance and has no profile
+       button; this is the only page that does. -->
+  <header id="top-bar" class="hidden melbete-stars">
+    <div class="topbar-brand">
+      <span class="logo-shine"><picture><source srcset="/static/img/melbete-bingo-logo.webp" type="image/webp"><img src="/static/img/melbete-bingo-logo.png" alt="Melbete Bingo" class="brand-logo-img"></picture><i class="melbete-sheen"></i></span>
+    </div>
+    <div class="topbar-actions">
+    <button id="lang-toggle-btn" class="lang-toggle" type="button" aria-label="Change language">EN</button>
+    <button id="header-profile-btn" class="header-profile-btn" type="button" aria-label="Open profile">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    </div>
+  </header>
+
+  <!-- Floating support bubble - pinned to the bottom-right corner, above
+       the bottom nav, so it's reachable from anywhere on the hub without
+       taking a slot in the nav itself. -->
+  <button id="support-btn" class="support-fab hidden" title="Contact Support" aria-label="Contact Support">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12a8 8 0 0116 0v5a2 2 0 01-2 2h-2v-7h4M4 12v7h4v-7H4z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 19c-.6 1.3-1.9 2-4 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+
+  <main id="view-container">
+
+    <div id="loading-view" class="view active">
+      <div class="melbete-splash" aria-hidden="true">
+        <span class="mb-splash-sky"></span><span class="mb-orbit"><i></i><i></i></span>
+        <span class="melbete-splash-logo"><img src="/static/img/melbete-bingo-logo.png" alt=""><i class="melbete-sheen"></i></span>
+        <span class="melbete-splash-bar"><i></i></span>
+        <p class="mb-splash-tag" data-i18n="splash_tag">Play. Win. Cash out.</p>
+      </div>
+    </div>
+
+    <!-- The game selection hub itself -->
+    <div id="game-select-view" class="view">
+      <section class="wallet-summary" aria-label="Wallet summary">
+        <button id="balance-btn" class="wallet-balance" title="Tap for transaction history" aria-label="Balance. Tap for transaction history">
+          <span class="balance-label" data-i18n="bal_label">Available balance</span>
+          <span class="wallet-amount"><strong id="balance-real">0</strong> <small>ETB</small></span>
+          <span class="history-hint" data-i18n="view_history">View history</span>
+        </button>
+        <div class="wallet-quick-actions">
+          <button id="quick-deposit-btn" class="wallet-action wallet-action-primary" type="button">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5M12 5L6.5 10.5M12 5l5.5 5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="deposit">ገንዘብ ያስገቡ</span>
+          </button>
+          <button id="quick-withdraw-btn" class="wallet-action" type="button">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14m0 0l-5.5-5.5M12 19l5.5-5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="withdraw">ገንዘብ ያውጡ</span>
+          </button>
+        </div>
+      </section>
+      <section id="deposit-timeline" class="deposit-timeline hidden" aria-live="polite" aria-label="Deposit status"></section>
+      <section id="cartela-quick-picker" class="quick-picker hidden" aria-label="Pick a cartela"></section>
+      <div class="game-list-heading">
+        <div><h1 data-i18n="play_title">Play Bingo</h1><p data-i18n="play_sub">Join a live Bingo round.</p></div>
+        <span class="games-available"><span aria-hidden="true"></span><span data-i18n="avail_one">1 available</span></span>
+      </div>
+      <div class="game-card-list">
+        <button class="game-card game-card-bingo" data-game="bingo">
+          <div class="game-card-art"><img src="/static/img/bingo.png" alt="" class="game-card-art-img"></div>
+          <span class="game-card-copy"><span class="game-card-name" data-i18n="game_name">Bingo</span><span class="game-card-description" data-i18n="game_desc">Live community rounds</span></span>
+          <span class="game-card-action"><span data-i18n="play">Play</span> <span aria-hidden="true">›</span></span>
+        </button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Bottom hub nav - Games (this screen), Deposit, Withdraw, Refer, Profile.
+       Deposit/Withdraw open their existing modals directly; Profile opens
+       the existing profile drawer. Nothing here navigates away from /app. -->
+  <nav id="hub-tabbar" class="hub-tabbar hidden" aria-label="Main navigation">
+    <button id="hub-balance-chip" class="footer-chip" type="button" aria-label="Balance and history"><i class="fc-dot" aria-hidden="true"></i><span data-i18n="chip_balance">Balance</span><strong id="hub-chip-value">0</strong><span data-i18n="chip_etb">ETB</span></button>
+    <button id="hub-tab-games" class="hub-tab-btn active" aria-label="Games">
+      <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.5 8h7a5.5 5.5 0 015.2 7.3l-.7 2a2.3 2.3 0 01-3.8.9l-1.7-1.7h-5l-1.7 1.7a2.3 2.3 0 01-3.8-.9l-.7-2A5.5 5.5 0 018.5 8z" stroke="currentColor" stroke-width="1.8"/><path d="M8 11v4M6 13h4M16.5 12h.01M18 14h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_games">Games</span>
+    </button>
+    <button id="hub-tab-promos" class="hub-tab-btn" aria-label="Promotions">
+      <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M12 9v11M3.5 9h17v-2.5a1 1 0 00-1-1h-15a1 1 0 00-1 1V9z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 5.5C12 4 10.8 3 9.6 3a1.8 1.8 0 000 3.6M12 5.5C12 4 13.2 3 14.4 3a1.8 1.8 0 010 3.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_promos">Promos</span>
+      <span id="hub-badge-promos" class="tab-badge hidden">0</span>
+    </button>
+    <button id="hub-tab-deposit" class="hub-tab-btn hub-tab-center" aria-label="ገንዘብ ማስገቢያ">
+      <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_deposit">ማስገቢያ</span>
+      <span id="hub-dot-deposit" class="tab-dot hidden" title="Deposit under review"></span>
+    </button>
+    <button id="hub-tab-withdraw" class="hub-tab-btn" aria-label="ገንዘብ ማውጫ">
+      <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5V19M12 19L6 13M12 19L18 13" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_withdraw">ማውጫ</span>
+    </button>
+    <button id="hub-tab-profile" class="hub-tab-btn" aria-label="Profile">
+      <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_profile">Profile</span>
+      <span id="hub-badge-profile" class="tab-badge hidden">0</span>
+    </button>
+  </nav>
+
+  <!-- Small floating Cashback icon (bottom right, above the footer pill). -->
+  <button id="cashback-fab" class="cashback-fab hidden" type="button" aria-label="Cashback" title="Cashback">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 11-2.4-5.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 4v4.2h-4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.2 14.8l5.6-5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9.4" cy="9.6" r="1.3" fill="currentColor"/><circle cx="14.6" cy="14.4" r="1.3" fill="currentColor"/></svg>
+    <span id="cashback-dot" class="tab-dot hidden"></span>
+  </button>
+
+
+  <!-- Deposit modal -->
+  <div id="deposit-modal" class="modal hidden" role="dialog" aria-labelledby="deposit-modal-title">
+    <div class="modal-content payment-modal">
+      <button class="modal-close" data-close="deposit-modal" aria-label="ዝጋ">&times;</button>
+      <h3 id="deposit-modal-title" data-i18n="dep_title">💳 ገንዘብ ማስገቢያ</h3>
+      <p class="muted small" data-i18n="dep_intro">የመክፈያ ዘዴዎን ይምረጡ፣ ገንዘቡን ይላኩ፣ ከዚያም ክፍያዎ በፍጥነት እንዲረጋገጥ የግብይቱን ኤስኤምኤስ እና ስክሪንሾት ያያይዙ።</p>
+
+      <div class="payment-step">
+        <span class="payment-step-badge">1</span>
+        <span class="payment-step-label" data-i18n="dep_s1">ገንዘብ የሚልኩበትን የመክፈያ ዘዴ ይምረጡ</span>
+      </div>
+      <div id="deposit-methods" class="method-list"></div>
+      <div id="deposit-account-info" class="account-info-box hidden"></div>
+
+      <div class="payment-step">
+        <span class="payment-step-badge">2</span>
+        <span class="payment-step-label" data-i18n="dep_s2">የላኩትን የገንዘብ መጠን ያስገቡ</span>
+      </div>
+      <label for="deposit-amount" class="field-label" data-i18n="dep_amount">የገንዘብ መጠን (ብር)</label>
+      <input id="deposit-amount" type="number" inputmode="numeric" placeholder="ለምሳሌ፦ 200" data-i18n-ph="dep_amount_ph" />
+      <p class="muted small" id="deposit-limits"></p>
+
+      <div class="payment-step">
+        <span class="payment-step-badge">3</span>
+        <span class="payment-step-label" data-i18n="dep_s3">በኤስኤምኤስ እና በስክሪንሾት ክፍያዎን ያረጋግጡ</span>
+      </div>
+      <label for="deposit-sms-text" class="field-label"><span data-i18n="dep_sms">የክፍያ ኤስኤምኤስ መልዕክት</span> <span class="required-mark" data-i18n="required">*ያስፈልጋል</span></label>
+      <textarea id="deposit-sms-text" rows="3" data-i18n-ph="dep_sms_ph" placeholder="ከቴሌብር ወይም ከሲቢኢ ብር የደረሰዎትን የግብይት ኤስኤምኤስ ሙሉውን እዚህ ይለጥፉ። የግብይት ማስፈንጠሪያ ካለው አብሮ መካተት ይችላል።" required></textarea>
+
+      <label for="deposit-screenshot" class="field-label"><span data-i18n="dep_shot">የክፍያ ስክሪንሾት</span> <span class="required-mark" data-i18n="required">*ያስፈልጋል</span></label>
+      <div class="file-drop">
+        <input id="deposit-screenshot" type="file" accept="image/*" required />
+        <span class="file-drop-hint" data-i18n="dep_shot_hint">📎 ስክሪንሾት ለማያያዝ እዚህ ይንኩ</span>
+      </div>
+      <img id="deposit-screenshot-preview" class="screenshot-preview hidden" alt="የተመረጠው የክፍያ ስክሪንሾት" />
+      <p class="warning-text small" data-i18n="dep_warn">⚠️ የግብይቱን ኤስኤምኤስ እና ስክሪንሾት ማያያዝ ግዴታ ነው። ኤስኤምኤሱ የግብይት ማስፈንጠሪያ ካለው ክፍያው ከዚህ በፊት ጥቅም ላይ እንዳልዋለ ይፈተሻል፤ ከሌለው ደግሞ አስተዳዳሪ በእጅ ያረጋግጠዋል።</p>
+
+      <button id="deposit-submit-btn" class="primary-btn" data-i18n="dep_submit">ገንዘቡን ልኬያለሁ</button>
+      <p class="muted small center-text" data-i18n="dep_foot">አስተዳዳሪው ክፍያዎን ካረጋገጠ በኋላ ገንዘቡ በቅርቡ ወደ ዋሌትዎ ይገባል።</p>
+    </div>
+  </div>
+
+  <!-- Withdraw modal -->
+  <div id="withdraw-modal" class="modal hidden" role="dialog" aria-labelledby="withdraw-modal-title">
+    <div class="modal-content payment-modal">
+      <button class="modal-close" data-close="withdraw-modal" aria-label="ዝጋ">&times;</button>
+      <h3 id="withdraw-modal-title" data-i18n="wd_title">🏧 ገንዘብ ማውጫ</h3>
+      <p class="muted small" id="withdraw-limits"></p>
+
+      <div class="payment-step">
+        <span class="payment-step-badge">1</span>
+        <span class="payment-step-label" data-i18n="wd_s1">ገንዘቡ የሚገባበትን የመክፈያ ዘዴ ይምረጡ</span>
+      </div>
+      <div id="withdraw-methods" class="method-list"></div>
+
+      <div id="withdraw-address-step">
+        <label for="withdraw-address" class="field-label"><span id="withdraw-method-name">የመክፈያ ሂሳብ ቁጥር</span></label>
+        <input id="withdraw-address" type="text" inputmode="tel" placeholder="ለምሳሌ፦ 09XXXXXXXX" data-i18n-ph="wd_account_ph" />
+        <button id="save-address-btn" class="secondary-btn" data-i18n="wd_save">የሂሳብ ቁጥሩን ያስቀምጡ</button>
+      </div>
+
+      <div id="withdraw-form-step" class="hidden">
+        <div class="payment-step">
+          <span class="payment-step-badge">2</span>
+          <span class="payment-step-label" data-i18n="wd_s2">የሂሳብ መረጃዎን እና የሚያወጡትን መጠን ያረጋግጡ</span>
+        </div>
+        <label for="withdraw-legal-name" class="field-label" data-i18n="wd_legal">በመክፈያ ሂሳቡ ላይ የተመዘገበው ሙሉ ስም</label>
+        <input id="withdraw-legal-name" type="text" placeholder="በሂሳቡ ላይ እንደተመዘገበው በትክክል ያስገቡ" data-i18n-ph="wd_legal_ph" />
+        <label for="withdraw-amount" class="field-label" data-i18n="wd_amount">የሚያወጡት የገንዘብ መጠን (ብር)</label>
+        <input id="withdraw-amount" type="number" inputmode="numeric" placeholder="ለምሳሌ፦ 300" data-i18n-ph="wd_amount_ph" />
+        <button id="withdraw-submit-btn" class="primary-btn" data-i18n="wd_submit">ገንዘብ ለማውጣት ጥያቄ ይላኩ</button>
+      </div>
+      <p class="muted small center-text" data-i18n="wd_foot">የገንዘብ ማውጣት ጥያቄዎችን አስተዳዳሪ ይመረምራል፤ ከተረጋገጠ በኋላም ክፍያውን በእጅ ይፈጽማል።</p>
+    </div>
+  </div>
+
+  <!-- Promotions panel: live bonus campaigns, referral and cashback. -->
+  <div id="promo-modal" class="modal hidden" role="dialog" aria-labelledby="promo-modal-title">
+    <div class="modal-content promo-modal-content">
+      <button class="modal-close" data-close="promo-modal" aria-label="Close">&times;</button>
+      <h3 id="promo-modal-title">🎁 Promotions</h3>
+      <p class="muted small">Bonus credit is non-withdrawable and can only be used for Bingo cartelas. Campaigns may be paused.</p>
+      <p><strong>Bonus credit: <span id="promo-bonus-balance">0</span> ETB</strong></p>
+      <div id="promo-list" class="promo-list"><div class="loader" style="margin:1rem auto"></div></div>
+    </div>
+  </div>
+
+  <!-- Bonus Center: promotional funds are separate from withdrawable funds. -->
+  <div id="bonus-modal" class="modal hidden" role="dialog" aria-labelledby="bonus-modal-title">
+    <div class="modal-content">
+      <button class="modal-close" data-close="bonus-modal" aria-label="Close">&times;</button>
+      <h3 id="bonus-modal-title">🎁 Bonus Center</h3>
+      <p class="muted small">Bonus credit is non-withdrawable and can only be used for Bingo cartelas. Bonus credit is used first; real balance covers any remainder. Campaigns may be paused.</p>
+      <p><strong>Available bonus credit: <span id="bonus-center-balance">0</span> ETB</strong></p>
+      <div id="bonus-center-rewards"><div class="loader" style="margin:1rem auto"></div></div>
+      <div id="bonus-center-referral" class="muted small"></div>
+      <div id="bonus-center-history"></div>
+    </div>
+  </div>
+
+  <!-- Transaction history modal -->
+  <div id="history-modal" class="modal hidden" role="dialog" aria-labelledby="history-modal-title">
+    <div class="modal-content">
+      <button class="modal-close" data-close="history-modal" aria-label="Close">&times;</button>
+      <h3 id="history-modal-title">📜 Transaction History</h3>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Referral modal -->
+  <div id="referral-modal" class="modal hidden" role="dialog" aria-labelledby="referral-modal-title">
+    <div class="modal-content">
+      <button class="modal-close" data-close="referral-modal" aria-label="Close">&times;</button>
+      <h3 id="referral-modal-title">🤝 Refer &amp; Earn</h3>
+      <p class="muted small" style="margin-bottom: 1rem;">Share your link with friends. When they register and sign up, you will earn bonus credits!</p>
+      <div id="referral-modal-content" class="referral-modal-content">
+        <div class="loader" style="margin: 2rem auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile drawer -->
+  <div id="profile-backdrop" class="drawer-backdrop hidden"></div>
+  <aside id="profile-drawer" class="profile-drawer" role="complementary" aria-labelledby="profile-title">
+    <div class="drawer-header">
+      <h3 id="profile-title">My Profile</h3>
+      <button class="drawer-close-btn" id="profile-close-btn" aria-label="Close Profile">&times;</button>
+    </div>
+
+    <div class="profile-avatar-wrap">
+      <div class="profile-avatar">👤</div>
+    </div>
+
+    <div id="profile-fields" class="profile-fields"></div>
+
+    <!-- Only shown for web-only sessions (outside Telegram) with no
+         linked account yet - see updateLinkTelegramVisibility() in app.js.
+         Deliberately understated so it never competes with the main
+         wallet actions above. -->
+    <button id="link-telegram-row" class="link-telegram-row hidden">
+      <span class="link-telegram-icon">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 4.5L2.5 11.6c-.9.35-.9 1.6.02 1.92l4.4 1.5m14.08-10.5-6.2 15.4c-.36.9-1.6.95-2.03.08l-3.05-6.1m11.28-9.38-11.28 9.38m0 0-.02 4.6c0 .95 1.15 1.35 1.75.62l2.55-3.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+      <span class="link-telegram-text">
+        <strong>Link Telegram Account</strong>
+        <span class="muted small">Keep your balance safe across devices</span>
+      </span>
+      <span class="link-telegram-chevron">›</span>
+    </button>
+    <div id="link-telegram-linked-row" class="link-telegram-row link-telegram-linked hidden">
+      <span class="link-telegram-icon">✅</span>
+      <span class="link-telegram-text">
+        <strong>Telegram Linked</strong>
+        <span class="muted small">Your account is safe across devices</span>
+      </span>
+    </div>
+  </aside>
+
+  <!-- Link Telegram Account modal -->
+  <div id="link-telegram-modal" class="modal hidden" role="dialog" aria-labelledby="link-telegram-modal-title">
+    <div class="modal-content">
+      <button class="modal-close" data-close="link-telegram-modal" aria-label="Close">&times;</button>
+      <h3 id="link-telegram-modal-title">🔗 Link Telegram Account</h3>
+      <p class="muted small">
+        Linking connects this browser to your real Telegram account, so your balance and history are safe
+        even if you clear your browser or switch devices - and any funds you already have here move with you.
+      </p>
+
+      <div id="link-telegram-start">
+        <button id="link-telegram-generate-btn" class="primary-btn">Generate Code</button>
+      </div>
+
+      <div id="link-telegram-pending" class="hidden">
+        <p class="muted small">1. Send this code to our Telegram bot (or tap the button below)</p>
+        <div id="link-telegram-code" class="link-telegram-code">------</div>
+        <a id="link-telegram-open-btn" class="primary-btn" href="#" target="_blank" rel="noopener">Open Telegram</a>
+        <p class="muted small" id="link-telegram-manual-hint">Or send <code>/link CODE</code> to the bot manually.</p>
+        <p class="link-telegram-status" id="link-telegram-status">
+          <span class="link-telegram-spinner"></span> Waiting for confirmation...
+        </p>
+      </div>
+
+      <div id="link-telegram-success" class="hidden">
+        <p class="link-telegram-success-msg">✅ Linked! Your account is now connected to Telegram.</p>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<script src="/static/js/melbete-i18n.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/gameselect.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/inbox.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-premium.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-control.js?v={{ APP_VERSION }}" defer></script>
+<script src="/static/js/melbete-progress.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-roundA.js?v={{ APP_VERSION }}"></script>
+</body>
+</html>

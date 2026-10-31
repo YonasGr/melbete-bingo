@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Melbete Bingo - Agent</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --text:#14181f; --muted:#6b7280; --accent:#1f7a4d; --line:#e5e7eb; --danger:#b42318; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1318; --card:#181e26; --text:#eef1f5; --muted:#98a2b3; --accent:#3ecf8e; --line:#2a323d; --danger:#f97066; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; padding-bottom:calc(16px + env(safe-area-inset-bottom)); background:var(--bg); color:var(--text); font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:560px; margin:0 auto; display:grid; gap:14px; }
+  h1 { font-size:20px; margin:0; } h2 { font-size:16px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .stat .label { color:var(--muted); font-size:13px; } .stat .value { font-size:22px; font-weight:700; }
+  label { display:block; font-size:13px; color:var(--muted); margin:8px 0 4px; }
+  input { width:100%; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); font-size:16px; }
+  button { width:100%; margin-top:12px; padding:13px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:16px; font-weight:600; }
+  button:disabled { opacity:.6; } button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-top:1px solid var(--line); font-size:14px; }
+  .row:first-child { border-top:0; } .muted { color:var(--muted); font-size:13px; word-break:break-all; }
+  .pos { color:var(--accent); } .neg { color:var(--danger); }
+  #msg { min-height:20px; font-size:14px; } .hidden { display:none; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:999px; background:var(--accent); color:#fff; font-size:13px; font-weight:700; }
+  .bar { height:10px; border-radius:999px; background:var(--line); overflow:hidden; margin:8px 0 4px; }
+  .bar > i { display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease; }
+  .tier-head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .pill { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .pill.paid { color:var(--accent); border-color:var(--accent); } .pill.cancelled { color:var(--danger); border-color:var(--danger); }
+  .me { font-weight:700; color:var(--accent); }
+  details summary { cursor:pointer; color:var(--muted); font-size:13px; margin-top:8px; }
+
+/* ---- Cosmic premium: always dark, starfield + aurora, gold accents (presentation only) ---- */
+  :root { --bg:#0B0B0F; --card:#15151B; --text:#F8FAFC; --muted:#A39F93; --accent:#FFC933; --line:#34312B; --danger:#F87171; color-scheme: dark; }
+  html, body { background:
+      radial-gradient(1px 1px at 18px 26px, rgba(255,255,255,.5) 50%, transparent 52%) 0 0 / 230px 250px,
+      radial-gradient(1px 1px at 120px 90px, rgba(255,224,138,.45) 50%, transparent 52%) 0 0 / 310px 280px,
+      radial-gradient(700px 420px at 8% -6%, rgba(139,92,246,.16), transparent 62%),
+      radial-gradient(640px 380px at 100% 4%, rgba(45,212,191,.08), transparent 60%),
+      radial-gradient(800px 460px at 50% 112%, rgba(255,184,0,.10), transparent 62%), #0B0B0F;
+    background-attachment: fixed; }
+  h1, h2 { color:#FFE08A; letter-spacing:.01em; }
+  .card { background: linear-gradient(150deg, rgba(255,255,255,.07), rgba(255,255,255,.02)), rgba(21,21,27,.78);
+    border:1px solid rgba(255,201,51,.18); box-shadow:0 8px 22px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.06);
+    -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
+  .stat .value { color:#FFC933; text-shadow:0 0 16px rgba(255,201,51,.25); }
+  input { background:rgba(255,255,255,.05); border:1px solid rgba(255,201,51,.2); caret-color:#FFC933; outline:none; transition:border-color .2s, box-shadow .25s; }
+  input:focus { border-color:#FFC933; box-shadow:0 0 0 3px rgba(255,201,51,.18), 0 0 18px rgba(139,92,246,.2); }
+  button { background:linear-gradient(135deg,#FFD65C,#F5A800); color:#14110A; border:1px solid rgba(255,232,150,.5);
+    box-shadow:0 6px 16px rgba(245,168,0,.28), inset 0 1px 0 rgba(255,255,255,.4); transition:filter .2s, box-shadow .25s, transform .12s; }
+  button:active:not(:disabled) { transform:scale(.98); }
+  button.secondary { background:rgba(255,255,255,.05); color:#FFC933; border:1px solid rgba(255,201,51,.45); box-shadow:none; }
+  .badge { background:linear-gradient(135deg,#FFD65C,#F5A800); color:#14110A; }
+  .bar { background:rgba(255,255,255,.08); }
+  .bar > i { background:linear-gradient(90deg,#FFC933,#F5A800); box-shadow:0 0 10px rgba(255,201,51,.5); }
+  .pill { border-color:rgba(255,201,51,.3); color:#E6D9B0; }
+  .row { border-top-color:rgba(255,255,255,.08); }
+  .pos { color:#4ADE80; }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent dashboard</h1>
+  <div id="msg" role="status"></div>
+  <section id="not-agent" class="card hidden"><p>This account is not an agent. Ask the house to register your Telegram ID.</p></section>
+  <div id="agent-view" class="hidden">
+    <section class="card">
+      <div class="stats">
+        <div class="stat"><div class="label">Float (ETB)</div><div class="value" id="float">0</div></div>
+        <div class="stat"><div class="label">Commission (ETB)</div><div class="value" id="commission">0</div></div>
+        <div class="stat"><div class="label">Players</div><div class="value" id="players">0</div></div>
+        <div class="stat"><div class="label">Rate</div><div class="value" id="rate">0%</div></div>
+      </div>
+      <p class="muted" id="status-line"></p>
+    </section>
+    <section class="card" id="rewards-card">
+      <div class="tier-head"><h2 style="margin:0">Your tier</h2><span class="badge" id="tier-badge">-</span></div>
+      <p class="muted" id="tier-line">&nbsp;</p>
+      <div class="bar" aria-hidden="true"><i id="tier-bar"></i></div>
+      <p class="muted" id="tier-next"></p>
+      <div class="stats" style="margin-top:10px">
+        <div class="stat"><div class="label">Rewards on hold (ETB)</div><div class="value" id="rw-pending">0</div></div>
+        <div class="stat"><div class="label">Rewards paid (ETB)</div><div class="value" id="rw-paid">0</div></div>
+      </div>
+      <details><summary>How rewards work</summary><p class="muted" id="rw-rules"></p></details>
+    </section>
+    <section class="card" id="rewards-list-card">
+      <h2>My rewards</h2><div id="rw-list"></div>
+    </section>
+    <section class="card" id="board-card">
+      <h2>Top agents this week</h2><div id="board"></div>
+    </section>
+    <section class="card">
+      <h2>Top up a player</h2>
+      <label for="t-id">Player's Telegram ID</label><input id="t-id" inputmode="numeric" autocomplete="off">
+      <label for="t-amount">Amount (ETB)</label><input id="t-amount" inputmode="numeric" autocomplete="off">
+      <button id="t-btn">Top up</button>
+    </section>
+    <section class="card">
+      <h2>Cash out commission</h2>
+      <p class="muted">Moves commission into your wallet; withdraw it from there as usual.</p>
+      <label for="c-amount">Amount (ETB)</label><input id="c-amount" inputmode="numeric" autocomplete="off">
+      <button id="c-btn" class="secondary">Cash out</button>
+    </section>
+    <section class="card">
+      <h2>Your invite link</h2>
+      <p class="muted" id="link">-</p>
+      <button id="copy-btn" class="secondary">Copy link</button>
+    </section>
+    <section class="card"><h2>Recent activity</h2><div id="ledger"></div></section>
+    <section class="card"><h2>My players</h2><div id="player-list"></div></section>
+  </div>
+</main>
+<script src="/static/js/agent.js?v={{ APP_VERSION }}"></script>
+</body>
+</html>

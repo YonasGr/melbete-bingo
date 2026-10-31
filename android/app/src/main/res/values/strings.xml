@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Melbete Bingo</string>
+    <string name="tagline">Play in Telegram.\nYour wallet and games live there.</string>
+    <string name="play">Play now</string>
+    <string name="get_telegram">Telegram is not installed. Get Telegram</string>
+    <string name="not_configured">This build has no bot configured.\nSet MELBETE_BOT_USERNAME and rebuild.</string>
+    <string name="version_label">Version %1$s</string>
+</resources>

@@ -1,0 +1,121 @@
+name: Deploy to Azure
+
+# Push to main -> run tests -> build the image in Azure Container Registry ->
+# roll the api and bot Container Apps to the new image.
+#
+# One-time setup (see DEPLOY_AZURE.md, "CI/CD"): create the Azure resources with
+# scripts/deploy_azure.sh, then add an Entra app registration with a federated
+# credential for this repo (OIDC - no stored passwords) and set these on the
+# GitHub "production" environment:
+#   secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   vars:    AZURE_RESOURCE_GROUP (e.g. bingo-rg), NAME_PREFIX (e.g. melbetebingo)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # OIDC login to Azure
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # never cancel a mid-flight deploy
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # 1. Run tests
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    # Real Postgres so the wallet concurrency tests (src/tests/integration) actually run.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        env:
+          TELEGRAM_BOT_TOKEN: test
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
+          REQUIRE_INTEGRATION_DB: "1"   # fail (not skip) if the DB is unreachable in CI
+          SECRET_KEY: test-secret-key-for-ci
+        run: pytest
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 2. Build in ACR and roll out to Container Apps
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Azure Container Apps
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag (short commit SHA)
+        id: vars
+        run: echo "image_tag=$(echo ${{ github.sha }} | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      # Cache-bust static assets so browsers pick up each deploy immediately.
+      - name: Inject cache buster into HTML templates
+        run: |
+          sed -i -E 's@(/static/(css|js)/[^"]+\.(css|js))(\?v=[a-zA-Z0-9_-]*)?@\1?v=${{ steps.vars.outputs.image_tag }}@g' src/templates/*.html || true
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch self-hosted fonts
+        run: bash scripts/fetch_fonts.sh || echo "::warning::fonts were not fetched; the app falls back to system fonts"
+
+      - name: Build image in ACR
+        id: acr
+        run: |
+          ACR=$(az acr list -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
+          echo "name=$ACR" >> "$GITHUB_OUTPUT"
+          az acr build -r "$ACR" -t "bingo-app:${{ steps.vars.outputs.image_tag }}" -t bingo-app:latest .
+
+      - name: Roll out api and bot
+        run: |
+          az extension add --name containerapp --upgrade -y
+          IMAGE="${{ steps.acr.outputs.name }}.azurecr.io/bingo-app:${{ steps.vars.outputs.image_tag }}"
+          for APP in api bot; do
+            az containerapp update -g "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              -n "${{ vars.NAME_PREFIX }}-$APP" --image "$IMAGE" -o none
+          done
+
+      - name: Wait for API readiness (database reachable)
+        run: |
+          FQDN=$(az containerapp show -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ vars.NAME_PREFIX }}-api" \
+                 --query properties.configuration.ingress.fqdn -o tsv)
+          for i in $(seq 1 18); do
+            if curl -sf "https://$FQDN/ready" > /dev/null; then echo "API healthy after $((i * 10))s."; exit 0; fi
+            echo "  [$i/18] not ready yet..."; sleep 10
+          done
+          echo "API did not report ready on /ready within 3 minutes."; exit 1

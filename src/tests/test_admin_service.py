@@ -1,0 +1,119 @@
+"""Tests for admin-managed payment methods."""
+import pytest
+
+from src.models.schemas import PaymentMethod
+from src.services.admin_service import AdminService
+
+
+class FakePaymentMethodRepository:
+    def __init__(self):
+        self.methods = {}
+
+    async def get(self, method_id):
+        return self.methods.get(method_id)
+
+    async def get_by_key(self, key):
+        for m in self.methods.values():
+            if m.key == key:
+                return m
+        return None
+
+    async def create(self, method: PaymentMethod):
+        self.methods[method.id] = method
+        return method
+
+    async def update(self, method_id, fields):
+        m = self.methods[method_id]
+        for k, v in fields.items():
+            setattr(m, k, v)
+
+    async def delete(self, method_id):
+        self.methods.pop(method_id, None)
+
+    async def list_all(self):
+        return sorted(self.methods.values(), key=lambda m: m.display_order)
+
+    async def list_active(self):
+        return [m for m in await self.list_all() if m.active]
+
+
+class FakeAdminRepository:
+    def __init__(self):
+        self.admins = {}
+
+    async def get_by_telegram_id(self, telegram_id):
+        return self.admins.get(str(telegram_id))
+
+    async def create(self, admin):
+        self.admins[admin.telegram_id] = admin
+        return admin
+
+    async def delete(self, telegram_id):
+        self.admins.pop(str(telegram_id), None)
+
+    async def list_all(self):
+        return list(self.admins.values())
+
+
+class FakeSettingsRepository:
+    async def get_or_create(self):
+        from src.models.schemas import SystemSettings
+
+        return SystemSettings()
+
+    async def update(self, fields):
+        return await self.get_or_create()
+
+
+@pytest.fixture
+def admin_service():
+    return AdminService(
+        admin_repo=FakeAdminRepository(),
+        payment_repo=FakePaymentMethodRepository(),
+        settings_repo=FakeSettingsRepository(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_payment_methods_are_not_seeded(admin_service):
+    assert await admin_service.list_payment_methods() == []
+
+
+@pytest.mark.asyncio
+async def test_deleted_payment_method_stays_deleted(admin_service):
+    method = await admin_service.upsert_payment_method(
+        key="telebirr", name="Telebirr", account_info="0912345678"
+    )
+    await admin_service.delete_payment_method(method.id)
+    assert await admin_service.list_payment_methods() == []
+
+
+@pytest.mark.asyncio
+async def test_list_payment_methods_returns_exact_database_rows(admin_service):
+    await admin_service.upsert_payment_method(
+        key="telebirr", name="Telebirr", account_info="0912345678"
+    )
+    methods = await admin_service.list_payment_methods()
+    keys = {m.key for m in methods}
+    assert keys == {"telebirr"}
+
+
+@pytest.mark.asyncio
+async def test_inactive_method_is_hidden_only_from_active_listing(admin_service):
+    method = await admin_service.upsert_payment_method(
+        key="cbe", name="CBE Birr", account_info="1000000000"
+    )
+    await admin_service.upsert_payment_method(
+        method_id=method.id,
+        key="cbe",
+        name="CBE Birr",
+        account_info=method.account_info,
+        active=False,
+    )
+
+    active_methods = await admin_service.list_payment_methods(active_only=True)
+    assert "cbe" not in {m.key for m in active_methods}
+
+    all_methods = await admin_service.list_payment_methods(active_only=False)
+    assert "cbe" in {m.key for m in all_methods}
+    assert sum(1 for m in all_methods if m.key == "cbe") == 1

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bingo - Melbete Games</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/css/style.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-fonts.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-theme.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-premium.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-footer.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-cosmic.css?v={{ APP_VERSION }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+</head>
+<body>
+<div id="app-shell">
+
+  <!-- Bingo's own header: brand, balances (informational only - full
+       wallet management now lives on the game-selection hub, /app),
+       Auto-Bingo toggle, "back to bingo lobby" and "back to game
+       selection" navigation. No profile button here - see index.html. -->
+  <header id="top-bar" class="hidden">
+    <button id="game-select-btn" class="game-back-btn" title="ወደ ጨዋታ ምርጫ ይመለሱ" aria-label="ወደ ጨዋታ ምርጫ ይመለሱ">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19 12H5M5 12L12 19M5 12L12 5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="topbar-brand">
+      <span class="game-header-brand">
+        <span class="bingo-brand-mark" aria-hidden="true">B</span>
+        <span class="brand-text">Bingo</span>
+      </span>
+      <span class="track-header-brand">
+        <picture><source srcset="/static/img/melbete-bingo-logo.webp" type="image/webp"><img src="/static/img/melbete-bingo-logo.png" alt="Melbete Games" class="track-header-logo"></picture>
+        <span class="track-header-context">የቢንጎ ክፍሎች</span>
+      </span>
+    </div>
+    <div class="room-header-context" aria-live="polite">
+      <span class="room-header-dot" aria-hidden="true"></span>
+      <span><strong id="current-room-name">Bingo</strong><small id="current-room-subtitle">Game room</small></span>
+    </div>
+    <div class="topbar-balances">
+      <div id="balance-display" class="balance-pill" title="Balance, shared across every Melbete Games game">
+        <span class="balance-label"><span class="default-balance-label">Balance</span><span class="track-balance-label">ቀሪ ሂሳብ</span></span>
+        <span><strong id="balance-real">0</strong> <span class="default-currency">ETB</span><span class="track-currency">ብር</span></span>
+      </div>
+      <button id="balance-bonus-pill" class="balance-pill bonus hidden" title="Playable, not withdrawable">
+        <span class="balance-label"><span class="default-balance-label">Bonus</span><span class="track-balance-label">ቦነስ</span></span>
+        <span><strong id="balance-bonus">0</strong> <span class="default-currency">ETB</span><span class="track-currency">ብር</span></span>
+      </button>
+    </div>
+    <div class="topbar-actions">
+      <button id="rooms-btn" class="profile-icon-btn hidden" title="ክፍል ቀይር" aria-label="ክፍሎች">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10.5L12 4l8 6.5V20h-6v-6h-4v6H4v-9.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Single content area - exactly one view is visible at a time. -->
+  <main id="view-container">
+
+    <div id="loading-view" class="view active">
+      <div class="melbete-splash" aria-hidden="true">
+        <span class="melbete-splash-logo"><img src="/static/img/melbete-bingo-logo.png" alt=""><i class="melbete-sheen"></i></span>
+        <span class="melbete-splash-bar"><i></i></span>
+      </div>
+      <p>Loading Melbete Games...</p>
+    </div>
+
+    <!-- The FIRST screen a player sees: pick which of the 3 rooms to
+         play in. Each card is fetched live from /api/lobby (state,
+         player count, prize pool) - see loadTrackSelect() in app.js.
+         This screen's text is in Amharic - all other screens stay
+         English (per explicit request: only the room-choosing screen). -->
+    <div id="track-select-view" class="view">
+      <div class="lobby-header">
+        <div class="view-title-row"><h2>ቀጥታ የቢንጎ ሎቢ</h2></div>
+        <p class="muted">አሁን ምን እየተካሄደ እንደሆነ ይመልከቱ እና ዝግጁ የሆነውን ክፍል ይምረጡ።</p>
+      </div>
+      <div class="track-lobby-summary" aria-live="polite">
+        <span>የሎቢ ሁኔታ</span>
+        <strong id="track-ready-summary">ክፍሎችን በመጫን ላይ…</strong>
+      </div>
+      <div id="track-cards" class="track-cards">
+        <div class="loader" style="margin: 2rem auto;"></div>
+      </div>
+    </div>
+
+    <div id="lobby-view" class="view">
+      <div class="lobby-header">
+        <div class="view-title-row"><h2>🎟️ Pick Your Cartela</h2><span class="live-badge">● LIVE</span></div>
+        <p class="muted">Reserve any free number below – it's free until the round starts. You can optionally play up to 2 cartelas.</p>
+        <div id="countdown-banner" class="countdown-banner hidden">
+          Round starts in <strong id="countdown-seconds">30</strong>s · <span id="players-joined-count">0</span> cartela(s) selected
+        </div>
+        <p id="lobby-status" class="muted small"></p>
+      </div>
+
+      <p id="my-cartelas-count" class="muted small my-cartelas-count"></p>
+      <div id="my-cartelas-preview" class="my-cartelas-preview hidden"></div>
+
+      <section class="cartela-picker-tools" aria-label="Find a cartela">
+        <label class="cartela-search-label" for="cartela-search">Choose your cartela</label>
+        <div class="cartela-search-row">
+          <input id="cartela-search" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="Search cartela number…" autocomplete="off" aria-label="Search cartela number">
+          <button id="cartela-search-clear" type="button" class="secondary-btn">Show all</button>
+        </div>
+        <div class="cartela-controls">
+          <button id="cartela-avail-toggle" type="button" class="chip-btn" aria-pressed="false">✓ Available only</button>
+          <button id="cartela-random" type="button" class="chip-btn chip-gold">🎲 Random</button>
+          <span class="seg" role="group" aria-label="List layout">
+            <button id="cartela-view-grid" type="button" class="on" aria-label="Grid view" title="Grid">▦</button>
+            <button id="cartela-view-list" type="button" aria-label="List view" title="List">☰</button>
+          </span>
+          <button id="cartela-theme-toggle" type="button" class="chip-btn chip-icon" aria-label="Switch list background" title="Light / dark list">🌙</button>
+        </div>
+        <div class="cartela-legend"><span><i class="legend-dot free"></i>Available</span><span><i class="legend-dot mine"></i>Selected by you</span><span><i class="legend-dot taken"></i>Taken</span></div>
+        <p id="cartela-picker-count" class="muted small" aria-live="polite">Loading cartelas…</p>
+      </section>
+      <div id="cartela-range-tabs" class="cartela-range-tabs hidden" role="tablist" aria-label="Cartela ranges"></div>
+      <div id="cartela-grid" class="cartela-grid" aria-label="Available cartelas"></div>
+    </div>
+
+    <!-- Shown when a game is in progress and this user has no cartela -->
+    <div id="waiting-view" class="view">
+      <div class="waiting-screen">
+        <div class="waiting-icon">🎲</div>
+        <h2 class="waiting-title">Game in Progress</h2>
+        <p class="waiting-desc">A round is already underway. Hang tight — you can join the next one as soon as it ends.</p>
+
+        <div class="waiting-stats" id="waiting-stats">
+          <div class="waiting-stat">
+            <span class="waiting-stat-value" id="wait-numbers-called">—</span>
+            <span class="waiting-stat-label">Numbers Called</span>
+          </div>
+          <div class="waiting-stat">
+            <span class="waiting-stat-value" id="wait-prize-pool">— ETB</span>
+            <span class="waiting-stat-label derash-label">Derash</span>
+          </div>
+          <div class="waiting-stat">
+            <span class="waiting-stat-value" id="wait-players">—</span>
+            <span class="waiting-stat-label">Players</span>
+          </div>
+        </div>
+
+        <div class="waiting-pulse">
+          <span class="waiting-pulse-dot"></span>
+          <span class="waiting-pulse-text">Live game running...</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="game-view" class="view">
+      <!-- Draw screen: stats strip, called-numbers board (left), big ball + recent calls +
+           my cartelas / watching-only panel (right). -->
+      <div class="gv-stats">
+        <div class="gv-stat"><span>Game ID</span><strong id="gv-game-id">-</strong></div>
+        <div class="gv-stat"><span>Players</span><strong id="gv-players">0</strong></div>
+        <div class="gv-stat"><span>Bet</span><strong id="gv-bet">0</strong></div>
+        <div class="gv-stat gv-stat-pool"><span class="derash-label">Derash</span><strong id="prize-pool">0</strong></div>
+        <div class="gv-stat"><span>Called</span><strong id="gv-called">0</strong></div>
+      </div>
+
+      <div class="gv-main">
+        <aside class="gv-board" aria-label="Called numbers board">
+          <div class="gv-board-head">
+            <span class="col-0">B</span><span class="col-1">I</span><span class="col-2">N</span><span class="col-3">G</span><span class="col-4">O</span>
+          </div>
+          <div id="master-board" class="gv-board-grid"></div>
+        </aside>
+
+        <section class="gv-right">
+          <div id="called-history" class="gv-recent"></div>
+
+          <div class="gv-ball-wrap">
+            <div class="current-call gv-ball" id="current-call">
+              <span class="call-letter" id="current-call-letter"></span><span class="gv-dash">-</span><span class="call-number" id="current-call-number">-</span>
+            </div>
+          </div>
+
+
+          <div class="gv-panel">
+            <div id="gv-watch" class="gv-watch hidden">
+              <div class="gv-eye" aria-hidden="true">&#128065;</div>
+              <h3>Watching Only</h3>
+              <p>የዚህ ዙር ጨዋታ ተጀምሯል። አዲስ ዙር ጨዋታ እስኪጀምር እዚሁ ይጠብቁ።</p>
+            </div>
+            <div id="my-cards-container"></div>
+            <p id="game-message" class="game-message"></p>
+          </div>
+        </section>
+      </div>
+    </div>
+
+  </main>
+
+
+  <!-- Winner celebration overlay -->
+  <div id="winner-overlay" class="winner-overlay hidden">
+    <div class="winner-overlay-content">
+      <button id="winner-close-x" class="winner-close-x" aria-label="Close">&times;</button>
+      <div class="winner-confetti">🎉</div>
+      <h2 id="winner-name">-</h2>
+      <p id="winner-subtitle" class="muted">got BINGO!</p>
+      <div id="winner-card" class="winner-card"></div>
+
+      <p id="winner-payout" class="winner-payout hidden"></p>
+      <button id="winner-rematch-btn" class="primary-btn hidden" style="margin-top: 1.5rem; width: 100%;">Play again</button>
+      <button id="winner-close-btn" class="secondary-btn" style="margin-top: 0.75rem; width: 100%;">Go to Lobby</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<div id="cartela-preview-sheet" class="cartela-sheet hidden" role="dialog" aria-modal="true" aria-label="Cartela preview">
+  <div class="cartela-sheet-backdrop" id="cartela-sheet-backdrop"></div>
+  <div class="cartela-sheet-panel">
+    <div id="cartela-sheet-card" class="cartela-sheet-card"></div>
+    <p id="cartela-sheet-note" class="muted small"></p>
+    <div class="cartela-sheet-actions">
+      <button id="cartela-sheet-cancel" type="button" class="secondary-btn">Cancel</button>
+      <button id="cartela-sheet-confirm" type="button" class="primary-btn">Select this cartela</button>
+    </div>
+  </div>
+</div>
+  <!-- Floating glass-pill footer for the bingo room. Hidden while a round is being played
+       (game-view) so it never covers the cards - see showView() in app.js. -->
+  <nav id="room-footer" class="room-footer hidden" aria-label="Room navigation">
+    <button id="room-chip" class="footer-chip" type="button" aria-label="Balance"><i class="fc-dot" aria-hidden="true"></i><span>Balance</span><strong id="room-chip-value">0</strong><span>ETB</span></button>
+    <button id="rf-rooms" class="rf-btn active" type="button" aria-label="Rooms">
+      <span class="rf-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10.5L12 4l8 6.5V20h-6v-6h-4v6H4v-9.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="rf-label">Rooms</span>
+    </button>
+    <button id="rf-games" class="rf-btn" type="button" aria-label="Games">
+      <span class="rf-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.5 8h7a5.5 5.5 0 015.2 7.3l-.7 2a2.3 2.3 0 01-3.8.9l-1.7-1.7h-5l-1.7 1.7a2.3 2.3 0 01-3.8-.9l-.7-2A5.5 5.5 0 018.5 8z" stroke="currentColor" stroke-width="1.8"/><path d="M8 11v4M6 13h4M16.5 12h.01M18 14h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span class="rf-label">Games</span>
+    </button>
+    <button id="rf-deposit" class="rf-btn rf-center" type="button" aria-label="ገንዘብ ማስገቢያ">
+      <span class="rf-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></span><span class="rf-label">ማስገቢያ</span>
+      <span id="rf-dot-deposit" class="tab-dot hidden" title="Deposit under review"></span>
+    </button>
+    <button id="rf-promos" class="rf-btn" type="button" aria-label="Promotions">
+      <span class="rf-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M12 9v11M3.5 9h17v-2.5a1 1 0 00-1-1h-15a1 1 0 00-1 1V9z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 5.5C12 4 10.8 3 9.6 3a1.8 1.8 0 000 3.6M12 5.5C12 4 13.2 3 14.4 3a1.8 1.8 0 010 3.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="rf-label">Promos</span>
+      <span id="rf-badge-promos" class="tab-badge hidden">0</span>
+    </button>
+    <button id="rf-profile" class="rf-btn" type="button" aria-label="Profile">
+      <span class="rf-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="rf-label">Profile</span>
+      <span id="rf-badge-profile" class="tab-badge hidden">0</span>
+    </button>
+  </nav>
+
+  <button id="room-cashback-fab" class="cashback-fab hidden" type="button" aria-label="Cashback" title="Cashback">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 11-2.4-5.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 4v4.2h-4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.2 14.8l5.6-5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9.4" cy="9.6" r="1.3" fill="currentColor"/><circle cx="14.6" cy="14.4" r="1.3" fill="currentColor"/></svg>
+    <span id="room-cashback-dot" class="tab-dot hidden"></span>
+  </button>
+
+
+<script src="/static/js/app.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-fx.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-premium.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-control.js?v={{ APP_VERSION }}" defer></script>
+<script src="/static/js/melbete-progress.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-share.js?v={{ APP_VERSION }}"></script>
+</body>
+</html>

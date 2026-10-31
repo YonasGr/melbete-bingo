@@ -1,0 +1,121 @@
+/* Melbete floating glass-pill footer - shared by the game hub and the bingo room.
+   Gold accents on dark glass; the centre button is the quick Deposit action. */
+.hub-tabbar, .room-footer {
+  position: fixed; left: 50%; bottom: calc(.7rem + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%); z-index: 38;
+  width: min(94vw, 420px); display: flex; align-items: center; justify-content: space-between;
+  padding: .35rem .45rem; border-radius: 30px;
+  background: linear-gradient(180deg, rgb(32 32 41 / .78), rgb(14 14 19 / .82));
+  -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgb(255 201 51 / .22);
+  box-shadow: 0 14px 34px rgb(0 0 0 / .55), inset 0 1px 0 rgb(255 255 255 / .08);
+  color: #B3AEA2;
+}
+.hub-tabbar.hidden, .room-footer.hidden { display: none; }
+
+.hub-tabbar .hub-tab-btn, .room-footer .rf-btn {
+  position: relative; flex: 1; min-width: 0; min-height: 54px; padding: .35rem .1rem;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem;
+  border: 0; background: transparent; color: inherit; cursor: pointer; border-radius: 22px;
+  -webkit-tap-highlight-color: transparent; transition: color .18s, transform .12s, background .18s;
+}
+.hub-tabbar .hub-tab-btn:active, .room-footer .rf-btn:active { transform: scale(.92); }
+.hub-tabbar .hub-tab-icon, .room-footer .rf-icon { display: grid; place-items: center; width: 22px; height: 22px; }
+.hub-tabbar .hub-tab-icon svg, .room-footer .rf-icon svg { width: 21px; height: 21px; }
+.hub-tabbar .hub-tab-label, .room-footer .rf-label { font-size: .6rem; font-weight: 700; letter-spacing: .01em; }
+
+/* Active tab: gold text, soft glow pill behind it. */
+.hub-tabbar .hub-tab-btn.active, .room-footer .rf-btn.active { color: #FFC933; background: rgb(255 201 51 / .12); }
+.hub-tabbar .hub-tab-btn.active::after, .room-footer .rf-btn.active::after {
+  content: ""; position: absolute; bottom: 3px; width: 16px; height: 3px; border-radius: 3px;
+  background: #FFC933; box-shadow: 0 0 10px rgb(255 201 51 / .8);
+}
+
+/* Centre quick-Deposit button: raised gold disc. */
+.hub-tabbar .hub-tab-center, .room-footer .rf-center { flex: 0 0 64px; margin-top: -24px; background: transparent !important; color: #14110A; }
+.hub-tabbar .hub-tab-center .hub-tab-icon, .room-footer .rf-center .rf-icon {
+  width: 52px; height: 52px; border-radius: 50%;
+  background: linear-gradient(135deg, #FFD65C, #F59E0B); color: #14110A;
+  border: 3px solid rgb(14 14 19 / .9);
+  box-shadow: 0 8px 20px rgb(245 158 11 / .45), 0 0 0 1px rgb(255 201 51 / .5);
+}
+.hub-tabbar .hub-tab-center .hub-tab-icon svg, .room-footer .rf-center .rf-icon svg { width: 26px; height: 26px; }
+.hub-tabbar .hub-tab-center .hub-tab-label, .room-footer .rf-center .rf-label { color: #FFC933; margin-top: .1rem; }
+.hub-tabbar .hub-tab-center::after, .room-footer .rf-center::after { display: none !important; }
+.hub-tabbar .hub-tab-center.has-dot .hub-tab-icon, .room-footer .rf-center.has-dot .rf-icon { animation: rfPulse 1.6s ease-in-out infinite; }
+@keyframes rfPulse { 0%,100% { box-shadow: 0 8px 20px rgb(245 158 11 / .45), 0 0 0 0 rgb(255 201 51 / .55); } 50% { box-shadow: 0 8px 20px rgb(245 158 11 / .45), 0 0 0 10px rgb(255 201 51 / 0); } }
+
+/* Notification badge (count) and pending dot. */
+.tab-badge {
+  position: absolute; top: 2px; left: 50%; margin-left: 6px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: #E5484D; color: #fff; font: 800 .58rem/16px system-ui, sans-serif; text-align: center;
+  box-shadow: 0 0 0 2px rgb(14 14 19 / .9);
+}
+.tab-dot {
+  position: absolute; top: -2px; right: 6px; width: 12px; height: 12px; border-radius: 50%;
+  background: #22C55E; box-shadow: 0 0 0 2px rgb(14 14 19 / .95), 0 0 8px rgb(34 197 94 / .8);
+}
+.tab-badge.hidden, .tab-dot.hidden { display: none; }
+
+/* Live balance chip floating just above the pill. */
+.footer-chip {
+  position: absolute; left: 50%; top: -2.15rem; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: .4rem; padding: .28rem .8rem; border-radius: 999px;
+  background: rgb(14 14 19 / .86); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border: 1px solid rgb(255 201 51 / .3); color: #F8FAFC; font: 700 .72rem/1 system-ui, sans-serif; cursor: pointer;
+  box-shadow: 0 6px 16px rgb(0 0 0 / .45); white-space: nowrap;
+}
+.footer-chip .fc-dot { width: 7px; height: 7px; border-radius: 50%; background: #22C55E; box-shadow: 0 0 8px #22C55E; animation: fcLive 2s ease-in-out infinite; }
+.footer-chip strong { color: #FFC933; font-weight: 800; font-variant-numeric: tabular-nums; }
+.footer-chip.bump strong { animation: fcBump .5s ease-out; }
+@keyframes fcLive { 50% { opacity: .35; } }
+@keyframes fcBump { 0% { transform: scale(1); } 40% { transform: scale(1.25); } 100% { transform: scale(1); } }
+
+/* Keep content and floating buttons clear of the pill. */
+body:has(#hub-tabbar:not(.hidden)) #view-container,
+body:has(#room-footer:not(.hidden)) #view-container { padding-bottom: calc(7.5rem + env(safe-area-inset-bottom, 0px)); }
+.support-fab { bottom: calc(6.4rem + env(safe-area-inset-bottom, 0px)); }
+@media (prefers-reduced-motion: reduce) { .footer-chip .fc-dot, .hub-tab-center.has-dot .hub-tab-icon, .rf-center.has-dot .rf-icon, .footer-chip.bump strong { animation: none !important; } }
+/* Toasts float above the pill instead of behind it. */
+body:has(#room-footer:not(.hidden)) .toast, body:has(#hub-tabbar:not(.hidden)) .toast { bottom: calc(6.6rem + env(safe-area-inset-bottom, 0px)); z-index: 60; }
+
+/* ---- Small floating Cashback icon (bottom right, above the pill) ---------- */
+.cashback-fab {
+  position: fixed; right: .9rem; bottom: calc(9.8rem + env(safe-area-inset-bottom, 0px)); z-index: 37;
+  width: 38px; height: 38px; display: grid; place-items: center; padding: 0; cursor: pointer;
+  border-radius: 50%; color: #14110A; border: 2px solid rgb(14 14 19 / .85);
+  background: linear-gradient(135deg, #FFD65C, #F59E0B);
+  box-shadow: 0 6px 16px rgb(245 158 11 / .45), 0 0 0 1px rgb(255 201 51 / .55);
+  animation: cbFloat 3.2s ease-in-out infinite; transition: transform .12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.cashback-fab svg { width: 20px; height: 20px; }
+.cashback-fab:active { transform: scale(.9); }
+.cashback-fab.hidden { display: none; }
+.cashback-fab .tab-dot { top: -3px; right: -3px; }
+@keyframes cbFloat { 0%,100% { translate: 0 0; } 50% { translate: 0 -4px; } }
+/* Bingo room has no support button, so the icon sits right above the pill. */
+body:has(#room-footer) .cashback-fab { bottom: calc(6.6rem + env(safe-area-inset-bottom, 0px)); }
+@media (prefers-reduced-motion: reduce) { .cashback-fab { animation: none; } }
+
+/* ---- Promotions panel ------------------------------------------------------- */
+.promo-modal-content { max-height: 86vh; overflow-y: auto; }
+.promo-list { display: grid; gap: .55rem; margin-top: .6rem; }
+.promo-card {
+  display: flex; align-items: center; gap: .7rem; padding: .7rem .8rem; border-radius: 14px;
+  background: rgb(255 255 255 / .05); border: 1px solid rgb(255 201 51 / .18);
+}
+.promo-card-icon { flex: 0 0 auto; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; font-size: 1.25rem; background: rgb(255 201 51 / .14); }
+.promo-card-body { flex: 1; min-width: 0; display: grid; gap: .15rem; }
+.promo-card-body strong { font-size: .86rem; color: var(--melbete-ink, #F8FAFC); }
+.promo-card-body span { font-size: .72rem; color: var(--melbete-ink-2, #B3AEA2); line-height: 1.35; }
+.promo-card-action { flex: 0 0 auto; }
+.promo-card-btn {
+  appearance: none; border: 0; cursor: pointer; font: inherit; font-size: .76rem; font-weight: 800;
+  padding: .5rem .95rem; border-radius: 999px; color: #14110A;
+  background: linear-gradient(135deg, #FFD65C, #F59E0B); box-shadow: 0 3px 10px rgb(255 184 0 / .28);
+}
+.promo-card-btn:disabled { opacity: .55; cursor: default; }
+.promo-state { font-size: .68rem; font-weight: 700; padding: .3rem .6rem; border-radius: 999px; white-space: nowrap; background: rgb(255 255 255 / .08); color: var(--melbete-ink-2, #B3AEA2); }
+.promo-state.done { background: rgb(34 197 94 / .18); color: #86EFAC; }
+.promo-state.soon { background: rgb(255 201 51 / .14); color: #FFC933; }

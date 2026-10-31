@@ -1,0 +1,220 @@
+"""Agent (reseller) service - step 1: create agents, suspend/activate them, manage their float.
+
+An agent's float is ETB the house has funded (cash or Telebirr, settled outside the app). It is only
+ever changed by an admin through `adjust_float`, one atomic DB transaction with a ledger row, and it
+can never go below zero. Player top-ups and commission build on this in later steps.
+"""
+import logging
+from decimal import Decimal, InvalidOperation
+from typing import Optional
+
+from src.models.schemas import Agent
+from src.repositories.agent_repository import (
+    AgentAlreadyExists,
+    AgentNotFound,
+    AgentRepository,
+    AgentSuspended,
+    CommissionWouldGoNegative,
+    FloatWouldGoNegative,
+)
+from src.repositories.player_repository import PlayerRepository
+
+logger = logging.getLogger(__name__)
+
+MAX_COMMISSION_BPS = 3000  # 30% hard cap; lower it here if the business wants a tighter limit
+MIN_TOPUP = 10  # ETB per player top-up
+MAX_TOPUP = 50_000
+MIN_CASHOUT = 10  # ETB of commission per cash-out
+MAX_FLOAT_ADJUSTMENT = 1_000_000  # ETB per single adjustment - guards against a typo'd extra zero
+
+
+class AgentError(Exception):
+    """Base class; `message` is safe to show to the admin."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class AgentNotFoundError(AgentError):
+    pass
+
+
+class AgentAlreadyExistsError(AgentError):
+    pass
+
+
+class InvalidAgentInputError(AgentError):
+    pass
+
+
+class InsufficientFloatError(AgentError):
+    pass
+
+
+class AgentSuspendedError(AgentError):
+    pass
+
+
+class InsufficientCommissionError(AgentError):
+    pass
+
+
+def commission_percent_to_bps(percent) -> int:
+    """12.5 -> 1250. Accepts int/float/str; rejects NaN, negatives and anything over the cap."""
+    try:
+        value = Decimal(str(percent))
+    except (InvalidOperation, ValueError):
+        raise InvalidAgentInputError("Commission must be a number")
+    if not value.is_finite():
+        raise InvalidAgentInputError("Commission must be a number")
+    bps = int((value * 100).to_integral_value())
+    if bps < 0 or bps > MAX_COMMISSION_BPS:
+        raise InvalidAgentInputError(f"Commission must be between 0 and {MAX_COMMISSION_BPS / 100:g}%")
+    return bps
+
+
+class AgentService:
+    def __init__(self, agent_repo: Optional[AgentRepository] = None, player_repo: Optional[PlayerRepository] = None):
+        self.agents = agent_repo or AgentRepository()
+        self.players = player_repo or PlayerRepository()
+
+    async def create_agent(self, admin_id: str, telegram_id: str, commission_percent) -> Agent:
+        telegram_id = str(telegram_id or "").strip()
+        if not telegram_id.isdigit():
+            raise InvalidAgentInputError("telegram_id must be the player's numeric Telegram ID")
+        bps = commission_percent_to_bps(commission_percent)
+        player = await self.players.get_by_telegram_id(telegram_id)
+        if player is None:
+            raise AgentNotFoundError("No player with that Telegram ID - they must open the bot once first")
+        if getattr(player, "is_bot", False):
+            raise InvalidAgentInputError("A bot account cannot be an agent")
+        if getattr(player, "is_banned", False):
+            raise InvalidAgentInputError("A banned player cannot be an agent")
+        try:
+            agent = await self.agents.create(player.id, bps, admin_id)
+        except AgentAlreadyExists:
+            raise AgentAlreadyExistsError("This player is already an agent")
+        logger.warning("Admin %s created agent %s for player %s (%d bps)", admin_id, agent.id, player.id, bps)
+        return agent
+
+    async def list_agents(self) -> list[Agent]:
+        return await self.agents.list_all()
+
+    async def get_agent(self, agent_id: str) -> Agent:
+        agent = await self.agents.get(agent_id)
+        if agent is None:
+            raise AgentNotFoundError("Agent not found")
+        return agent
+
+    async def set_status(self, admin_id: str, agent_id: str, status: str) -> Agent:
+        if status not in ("active", "suspended"):
+            raise InvalidAgentInputError("status must be 'active' or 'suspended'")
+        agent = await self.agents.set_status(agent_id, status)
+        if agent is None:
+            raise AgentNotFoundError("Agent not found")
+        logger.warning("Admin %s set agent %s to %s", admin_id, agent_id, status)
+        return agent
+
+    async def adjust_float(self, admin_id: str, agent_id: str, amount, note: str = "") -> Agent:
+        """Positive = the house funds the agent; negative = take float back. Never below zero."""
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise InvalidAgentInputError("amount must be a whole number of ETB")
+        if amount == 0 or abs(amount) > MAX_FLOAT_ADJUSTMENT:
+            raise InvalidAgentInputError(f"amount must be non-zero and at most {MAX_FLOAT_ADJUSTMENT} ETB")
+        try:
+            agent = await self.agents.adjust_float_atomic(agent_id, amount, admin_id, (note or "")[:200])
+        except AgentNotFound:
+            raise AgentNotFoundError("Agent not found")
+        except FloatWouldGoNegative:
+            raise InsufficientFloatError("That would take the agent's float below zero")
+        logger.warning("Admin %s adjusted float of agent %s by %+d (now %d)", admin_id, agent_id, amount, agent.float_balance)
+        return agent
+
+    # ------------------------------------------------------------------
+    # Agent self-service (the agent acts as themselves, identified by their player id)
+    # ------------------------------------------------------------------
+
+    async def get_by_player(self, player_id: str) -> Agent:
+        agent = await self.agents.get_by_player(player_id)
+        if agent is None:
+            raise AgentNotFoundError("You are not an agent")
+        return agent
+
+    async def topup_player(self, agent_player_id: str, target_telegram_id, amount) -> dict:
+        """The agent pays `amount` ETB of their float into a player's wallet. The agent earns
+        floor(amount * commission_bps / 10000) ETB commission, funded by the house."""
+        if isinstance(amount, bool) or not isinstance(amount, int) or not (MIN_TOPUP <= amount <= MAX_TOPUP):
+            raise InvalidAgentInputError(f"Top-up must be a whole number between {MIN_TOPUP} and {MAX_TOPUP} ETB")
+        target_telegram_id = str(target_telegram_id or "").strip()
+        if not target_telegram_id.isdigit():
+            raise InvalidAgentInputError("Enter the player's numeric Telegram ID")
+        agent = await self.get_by_player(agent_player_id)
+        if agent.status != "active":
+            raise AgentSuspendedError("Your agent account is suspended")
+        player = await self.players.get_by_telegram_id(target_telegram_id)
+        if player is None:
+            raise AgentNotFoundError("No player with that Telegram ID - they must open the bot once first")
+        if player.id == agent.player_id:
+            raise InvalidAgentInputError("You cannot top up your own account")
+        if getattr(player, "is_bot", False) or getattr(player, "is_banned", False):
+            raise InvalidAgentInputError("That account cannot receive top-ups")
+        commission = amount * max(agent.commission_bps, agent.tier_bps) // 10000  # tier can only raise the base rate
+        try:
+            result = await self.agents.topup_atomic(agent.id, player.id, amount, commission)
+        except AgentNotFound:
+            raise AgentNotFoundError("You are not an agent")
+        except AgentSuspended:
+            raise AgentSuspendedError("Your agent account is suspended")
+        except FloatWouldGoNegative:
+            raise InsufficientFloatError("Not enough float - ask the house to top up your float")
+        logger.info("Agent %s topped up %s with %d ETB (commission %d)", agent.id, player.id, amount, commission)
+        result["commission"] = commission
+        result["player_name"] = player.display_name
+        # Held new-player reward + tier refresh. Best-effort: never raises into the top-up.
+        from src.services.agent_rewards import AgentRewardService
+
+        await AgentRewardService(self.agents).on_player_deposit(player.id, amount, result["transaction_id"])
+        from src.services import player_notifications as pn
+
+        pn.schedule_notify(player.id, "agent_topup_received", {"amount": amount},
+                           dedupe_key=f"agent_topup:{result['transaction_id']}")
+        return result
+
+    async def cashout_commission(self, agent_player_id: str, amount) -> dict:
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < MIN_CASHOUT:
+            raise InvalidAgentInputError(f"Cash-out must be a whole number of at least {MIN_CASHOUT} ETB")
+        agent = await self.get_by_player(agent_player_id)
+        try:
+            result = await self.agents.cashout_commission_atomic(agent.id, amount)
+        except AgentNotFound:
+            raise AgentNotFoundError("You are not an agent")
+        except AgentSuspended:
+            raise AgentSuspendedError("Your agent account is suspended")
+        except CommissionWouldGoNegative:
+            raise InsufficientCommissionError("You do not have that much commission")
+        return result
+
+    async def dashboard(self, agent_player_id: str) -> dict:
+        agent = await self.get_by_player(agent_player_id)
+        return {
+            "agent": agent,
+            "player_count": await self.agents.count_players(agent.id),
+            "ledger": await self.agents.list_ledger(agent.id, 50),
+        }
+
+    async def list_players(self, agent_player_id: str) -> list[dict]:
+        agent = await self.get_by_player(agent_player_id)
+        return await self.agents.list_players(agent.id)
+
+    async def link_player_by_code(self, player_id: str, agent_code: str) -> bool:
+        """Deep link /start ag_<CODE>: attach a player to the agent unless they already have one,
+        are the agent themselves, or the agent is suspended. Never raises for bad codes."""
+        agent = await self.agents.get_by_code(str(agent_code or "").strip().upper())
+        if agent is None or agent.status != "active" or agent.player_id == player_id:
+            return False
+        return await self.agents.link_player(player_id, agent.id)
+
+    async def ledger_for_admin(self, agent_id: str) -> list:
+        await self.get_agent(agent_id)
+        return await self.agents.list_ledger(agent_id, 200)

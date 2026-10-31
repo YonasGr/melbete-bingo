@@ -1,0 +1,12 @@
+/* Self-hosted fonts (files fetched by scripts/fetch_fonts.sh). font-display: swap = text is never invisible. */
+@font-face { font-family: "Inter"; src: url(/static/fonts/inter-latin-wght.woff2) format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Sora"; src: url(/static/fonts/sora-latin-wght.woff2) format("woff2"); font-weight: 100 800; font-style: normal; font-display: swap; }
+@font-face { font-family: "Noto Sans Ethiopic"; src: local("Noto Sans Ethiopic"), url(/static/fonts/noto-ethiopic-400.woff2) format("woff2"); font-weight: 400; font-display: swap; unicode-range: U+1200-139F, U+2D80-2DDF, U+AB00-AB2F; }
+@font-face { font-family: "Noto Sans Ethiopic"; src: local("Noto Sans Ethiopic Bold"), url(/static/fonts/noto-ethiopic-700.woff2) format("woff2"); font-weight: 500 900; font-display: swap; unicode-range: U+1200-139F, U+2D80-2DDF, U+AB00-AB2F; }
+:root {
+  --melbete-font: "Inter", "Noto Sans Ethiopic", "Abyssinica SIL", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --melbete-display: "Sora", "Inter", "Noto Sans Ethiopic", system-ui, sans-serif;
+}
+html, body, button, input, select, textarea { font-family: var(--melbete-font); }
+h1, h2, h3, .promo-title, .qp-head h2, .winner-overlay-content h2, .gv-ball, .wallet-amount strong { font-family: var(--melbete-display); letter-spacing: -.01em; }
+picture { display: contents; }

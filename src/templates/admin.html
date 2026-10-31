@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Melbete Bingo — Admin</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/css/admin.css?v={{ APP_VERSION }}">
+  <link rel="stylesheet" href="/static/css/melbete-fonts.css?v={{ APP_VERSION }}">
+  <link rel="stylesheet" href="/static/css/melbete-admin-theme.css?v={{ APP_VERSION }}">
+  <link rel="stylesheet" href="/static/css/melbete-admin-cosmic.css?v={{ APP_VERSION }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+</head>
+<body>
+<div id="admin-app">
+  <div id="login-screen" class="panel">
+    <div class="panel-card"><picture><source srcset="/static/img/melbete-bingo-logo.webp" type="image/webp"><img src="/static/img/melbete-bingo-logo.png" alt="Melbete Bingo" class="panel-brand"></picture><h2>Admin Login</h2><p class="muted">This panel is available only from Telegram and requires an authenticator-app code.</p></div>
+  </div>
+
+  <div id="admin-shell" class="admin-shell hidden">
+    <a class="skip-link" href="#admin-main">Skip to main content</a>
+    <aside class="command-sidebar">
+      <div class="command-brand"><span class="brand-tile">MB</span><div><strong>Melbete Admin</strong><span>Operations center</span></div></div>
+      <nav class="command-nav" aria-label="Admin sections">
+        <div class="nav-cluster"><span class="nav-heading">Workspace</span><button class="admin-nav-item active" data-tab="dashboard"><i>⌂</i>Overview</button></div>
+        <div class="nav-cluster"><span class="nav-heading">Operations</span><button class="admin-nav-item" data-tab="deposits"><i>↓</i>Deposits</button><button class="admin-nav-item" data-tab="withdrawals"><i>↑</i>Withdrawals</button><button class="admin-nav-item" data-tab="games"><i>◆</i>Games</button><button class="admin-nav-item" data-tab="users"><i>◎</i>Players</button><button class="admin-nav-item super-only" data-tab="agents"><i>⚑</i>Agents</button></div>
+        <div class="nav-cluster"><span class="nav-heading">Insights</span><button class="admin-nav-item" data-tab="economy"><i>▥</i>Economy</button><button class="admin-nav-item" data-tab="referrals"><i>◇</i>Referrals</button></div>
+        <div class="nav-cluster"><span class="nav-heading">Platform</span><button class="admin-nav-item" data-tab="control"><i>✦</i>Control Center</button><button class="admin-nav-item" data-tab="broadcast"><i>◁</i>Broadcast</button><button class="admin-nav-item" data-tab="payments"><i>▰</i>Payment methods</button><button class="admin-nav-item super-only" data-tab="settings"><i>⚙</i>Configuration</button><button class="admin-nav-item super-only" data-tab="admins"><i>♢</i>Admin access</button></div>
+      </nav>
+      <div class="command-account"><span class="admin-avatar">A</span><div><strong>Administrator</strong><span id="sidebar-role">Secure session</span></div><button id="sidebar-logout-btn" aria-label="Log out" title="Log out">↪</button></div>
+    </aside>
+
+    <div class="command-workspace">
+      <header class="command-topbar">
+        <span class="mobile-brand brand-tile">SB</span>
+        <div class="topbar-copy"><h1 id="topbar-title">Dashboard</h1><span id="topbar-context">Live operations and platform health</span></div>
+        <button id="topbar-refresh" class="icon-btn" aria-label="Refresh this screen" title="Refresh">↻</button>
+        <span id="role-badge" class="role-badge"></span>
+      </header>
+
+      <main id="admin-main" class="command-main">
+        <section id="tab-dashboard" class="tab-panel active">
+          <header class="page-heading"><div><h2>Operations overview</h2><p>What needs attention across money, games, players, and platform health.</p></div><span class="live-indicator"><i></i>Live data</span></header>
+          <div class="dashboard-layout">
+            <div class="dashboard-primary"><div id="live-game-banner"></div><div id="live-today"></div><div id="overview-stats" class="stat-grid overview-grid"></div></div>
+            <aside class="product-health"><div class="panel-heading"><div><h3>Game portfolio</h3><p>Active product</p></div></div><section class="product-health-row"><div class="product-monogram bingo">B</div><div><strong>Melbete Bingo</strong><span>Live multiplayer rooms</span></div><span class="status-label online">Live</span></section></aside>
+          </div>
+<article class="work-panel recent-activity"><div class="panel-heading"><div><h3>Recent rounds</h3><p>Latest Melbete Bingo activity</p></div><button class="text-btn" data-jump-tab="games">Open history →</button></div><div id="recent-games-dashboard"></div></article>
+        </section>
+
+        <section id="tab-deposits" class="tab-panel">
+          <header class="page-heading"><div><h2>Deposit review</h2><p>Verify incoming payments and keep a complete decision trail.</p></div></header>
+          <div class="queue-toolbar"><div class="filter-tabs"><button class="active" data-deposit-filter="pending">Pending</button><button data-deposit-filter="approved">Approved</button><button data-deposit-filter="rejected">Rejected</button><button data-deposit-filter="all">All history</button></div><span class="queue-guidance">Verify evidence before crediting a wallet</span></div>
+          <details class="work-panel" id="stmt-panel">
+            <summary><strong>Match a payment statement</strong> <span class="muted small">check pending deposits against Telebirr / bank records</span></summary>
+            <div class="admin-form">
+              <div class="field"><label for="stmt-text">Statement (CSV with header row)</label><textarea id="stmt-text" rows="6" placeholder="Date,Receipt No,Credit Amount&#10;..."></textarea></div>
+              <div class="field"><label for="stmt-ref">Reference column (optional)</label><input id="stmt-ref" placeholder="auto-detected"></div>
+              <div class="field"><label for="stmt-amt">Amount column (optional)</label><input id="stmt-amt" placeholder="auto-detected"></div>
+              <button class="primary-btn" type="button" id="stmt-run">Match statement</button>
+              <div id="stmt-result" class="muted small"></div>
+              <button class="btn btn-approve hidden" type="button" id="stmt-approve">Approve all matched</button>
+            </div>
+          </details>
+          <div id="deposits-list" class="record-list operation-list"></div>
+        </section>
+
+        <section id="tab-withdrawals" class="tab-panel">
+          <header class="page-heading"><div><h2>Withdrawal review</h2><p>Confirm payout details, pay players, and audit previous decisions.</p></div></header>
+          <div class="queue-toolbar"><div class="filter-tabs"><button class="active" data-withdrawal-filter="pending">Pending</button><button data-withdrawal-filter="approved">Paid</button><button data-withdrawal-filter="rejected">Rejected</button><button data-withdrawal-filter="all">All history</button></div><span class="queue-guidance warning">Payout actions move real money</span></div>
+          <div id="withdrawals-list" class="record-list operation-list"></div>
+        </section>
+
+        <section id="tab-economy" class="tab-panel">
+          <header class="page-heading"><div><h2>Economy</h2><p>Understand wallet liabilities, money movement, and game performance.</p></div></header>
+          <div id="economy-wallets" class="stat-grid wallet-grid"></div>
+          <div class="economy-layout"><article class="work-panel chart-panel"><div class="panel-heading"><div><h3>30-day money movement</h3><p>Deposits, stakes, and payouts</p></div></div><div id="economy-chart" class="economy-chart"></div></article><article class="work-panel ledger-search"><div class="panel-heading"><div><h3>Player ledger</h3><p>Investigate a player’s complete transaction trail</p></div></div><div class="search-row"><input id="economy-user-search" class="admin-search" placeholder="Name or Telegram ID"><button id="economy-user-load-btn" class="primary-btn">Search</button></div><div id="economy-user-history"></div></article></div>
+          <article class="work-panel"><div class="panel-heading"><div><h3>Melbete Bingo lifetime totals</h3><p>Financial performance across completed activity</p></div></div><div id="economy-summary" class="stat-grid report-grid"></div></article>
+          <div id="economy-top-depositors" class="record-list"></div><div id="economy-top-winners" class="record-list hidden"></div></article>
+        </section>
+
+        <section id="tab-games" class="tab-panel">
+          <header class="page-heading"><div><h2>Game operations</h2><p>Audit rounds, spins, tickets, bets, winners, and operational interventions.</p></div></header>
+          <div class="product-switcher"><button class="active" data-game-type-tab="bingo"><span class="product-monogram bingo">B</span><span><strong>Melbete Bingo</strong><small>Rounds and rooms</small></span></button></div>
+          <article id="games-bingo-panel" class="work-panel game-history-panel"><div class="panel-heading"><div><h3>Melbete Bingo rounds</h3><p>Running, waiting, completed, and terminated rooms</p></div><div class="filter-tabs compact"><button class="active" data-game-filter="all">All</button><button data-game-filter="waiting">Waiting</button><button data-game-filter="running">Running</button><button data-game-filter="ended">Ended</button><button data-game-filter="terminated">Terminated</button></div></div><div id="games-list" class="record-list"></div></article>
+        </section>
+
+        <section id="tab-users" class="tab-panel">
+          <header class="page-heading"><div><h2>Player directory</h2><p>Find an account, inspect wallets, and manage access safely.</p></div><label class="page-search"><span class="sr-only">Search players</span><input id="users-search" class="admin-search" placeholder="Search name or Telegram ID"></label></header>
+          <div id="users-list" class="record-list directory-list"></div>
+          <article class="work-panel super-only" id="abuse-panel">
+            <div class="panel-heading"><div><h3>Abuse review</h3><p>Accounts that share a connection, phone number or payout account. Judge each case: families share Wi-Fi.</p></div><button class="btn" id="abuse-run" type="button">Run review</button></div>
+            <div id="abuse-report" class="muted small"></div>
+          </article>
+        </section>
+
+        <section id="tab-agents" class="tab-panel">
+          <header class="page-heading"><div><h2>Agents</h2><p>Resellers who top up players from a house-funded float and earn commission.</p></div></header><div class="split-workspace"><div><article class="work-panel"><div class="panel-heading"><div><h3>All agents</h3><p>Float, commission and linked players</p></div></div><div id="agents-list" class="record-list"></div></article></div><aside class="work-panel editor-panel"><div class="panel-heading"><div><h3>Register an agent</h3><p>The player must have opened the bot once</p></div></div><form id="add-agent-form" class="admin-form"><div class="field"><label for="new-agent-id">Telegram numeric ID</label><input id="new-agent-id" required inputmode="numeric" placeholder="e.g. 12345678"></div><div class="field"><label for="new-agent-commission">Commission % of each top-up</label><input id="new-agent-commission" required inputmode="decimal" value="3"><p class="field-help">0 to 30. Paid by the house, earned on every top-up the agent makes.</p></div><button class="primary-btn" type="submit">Register agent</button></form></aside></div>
+          <header class="page-heading"><div><h2>Agent rewards</h2><p>Monthly commission tiers, held new-player and retention rewards, and abuse checks.</p></div></header>
+          <div class="split-workspace">
+            <div>
+              <article class="work-panel"><div class="panel-heading"><div><h3>Abuse flags</h3><p>Same agent topping up the same player 5+ times in 24 hours</p></div></div><div id="reward-flags" class="record-list"></div></article>
+              <article class="work-panel"><div class="panel-heading"><div><h3>Rewards</h3><p>Latest 100. Cancel a reward while it is still on hold.</p></div></div><div id="rewards-list" class="record-list"></div></article>
+            </div>
+            <aside class="work-panel editor-panel">
+              <div class="panel-heading"><div><h3>Reward rules</h3><p>Amounts in ETB, paid by the house</p></div></div>
+              <form id="reward-settings-form" class="admin-form">
+                <div class="field"><label><input type="checkbox" id="rs-enabled"> Player rewards enabled</label></div>
+                <div class="field"><label for="rs-bounty">New-player reward</label><input id="rs-bounty" inputmode="numeric" required></div>
+                <div class="field"><label for="rs-min-deposit">Minimum first deposit</label><input id="rs-min-deposit" inputmode="numeric" required></div>
+                <div class="field"><label for="rs-rounds">Rounds the player must play</label><input id="rs-rounds" inputmode="numeric" required></div>
+                <div class="field"><label for="rs-hold">Hold period (days)</label><input id="rs-hold" inputmode="numeric" required><p class="field-help">Rewards are paid only after this, so reversed or fake deposits can be caught.</p></div>
+                <div class="field"><label for="rs-retention">Retention reward</label><input id="rs-retention" inputmode="numeric" required></div>
+                <div class="field"><label for="rs-retention-days">Retention after (days)</label><input id="rs-retention-days" inputmode="numeric" required></div>
+                <div class="field"><label for="rs-cap">Daily payout cap per agent</label><input id="rs-cap" inputmode="numeric" required><p class="field-help">0 means no cap.</p></div>
+                <button class="primary-btn" type="submit">Save rules</button>
+              </form>
+              <div class="panel-heading"><div><h3>Commission tiers</h3><p>Based on this month's volume. A tier never lowers an agent's own rate.</p></div></div>
+              <form id="tiers-form" class="admin-form">
+                <div id="tiers-rows"></div>
+                <button class="btn" type="button" id="add-tier-btn">Add tier</button>
+                <button class="primary-btn" type="submit">Save tiers</button>
+              </form>
+            </aside>
+          </div>
+        </section>
+
+        <section id="tab-referrals" class="tab-panel">
+          <header class="page-heading"><div><h2>Referral programme</h2><p>Track inviters, joined players, caps, and bonus distributions.</p></div></header><div id="referrals-summary" class="stat-grid referral-grid"></div><article class="work-panel"><div class="panel-heading"><div><h3>Referral relationships</h3><p>Inviters and their awarded players</p></div></div><div id="referrals-list" class="record-list"></div></article>
+        </section>
+
+        <section id="tab-broadcast" class="tab-panel">
+          <header class="page-heading"><div><h2>Broadcast center</h2><p>Compose a Telegram announcement, preview its content, and monitor delivery.</p></div></header>
+          <div id="broadcast-live-monitor" class="work-panel hidden" style="margin-bottom: 1.25rem; border: 1px solid var(--line-strong); background: var(--surface); box-shadow: var(--shadow-md);">
+            <div class="panel-heading" style="margin-bottom: 0.75rem;">
+              <div>
+                <h3 style="color: var(--ink-950); font-size: 0.95rem; font-weight: 800; margin: 0;">Broadcast Delivery Progress</h3>
+                <p id="broadcast-monitor-subtitle" style="color: var(--ink-600); font-size: 0.72rem; margin-top: 0.2rem;">Real-time execution status</p>
+              </div>
+              <span id="broadcast-status-badge" class="pill running">Running</span>
+            </div>
+            <div style="margin-top: 0.85rem;">
+              <div style="background: var(--surface-alt); border: 1px solid var(--line); border-radius: 999px; height: 12px; overflow: hidden; padding: 2px;">
+                <div id="broadcast-progress-bar" style="background: linear-gradient(90deg, var(--blue-600), var(--green-700)); width: 0%; height: 100%; border-radius: 999px; transition: width 0.3s ease;"></div>
+              </div>
+              <p id="broadcast-monitor-stats" style="margin-top: 0.65rem; color: var(--ink-950); font-size: 0.78rem; font-weight: 750; line-height: 1.4;"></p>
+            </div>
+            <div style="margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 0.5rem;">
+              <button id="broadcast-dismiss-btn" type="button" class="secondary-btn hidden" style="min-height: 36px; font-weight: 750;">✕ Clear / New Broadcast</button>
+              <button id="broadcast-cancel-btn" type="button" class="btn-terminate" style="min-height: 36px; font-weight: 800;">⛔ Stop / Cancel Broadcast</button>
+            </div>
+          </div>
+          <form id="broadcast-form" class="broadcast-workspace"><div class="broadcast-compose work-panel"><div class="panel-heading"><div><h3>Message</h3><p>Plain text is the most reliable delivery format</p></div></div><div class="field"><label for="broadcast-text">Announcement text</label><textarea id="broadcast-text" rows="7" maxlength="4096" placeholder="Write the announcement players should receive…"></textarea><p class="field-help">Maximum 4,096 characters. An image-only announcement is also supported.</p></div><div class="field"><label for="broadcast-photo">Image <span>Optional</span></label><div class="broadcast-image-picker"><input id="broadcast-photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><label class="broadcast-image-select" for="broadcast-photo">Choose image</label><span id="broadcast-photo-name" class="field-help">JPEG, PNG, or WebP · up to 5 MB</span></div></div><div id="broadcast-image-preview" class="broadcast-image-preview hidden"><img id="broadcast-photo-preview" alt="Selected broadcast image preview"><button id="broadcast-photo-remove" type="button">Remove image</button></div></div>
+          <aside class="broadcast-options work-panel"><div class="panel-heading"><div><h3>Action buttons</h3><p>Optional · up to three</p></div></div><div class="button-pair"><div class="field"><label for="broadcast-button-1-text">Button 1 label</label><input id="broadcast-button-1-text" maxlength="64" placeholder="Open Melbete Bingo"></div><div class="field"><label for="broadcast-button-1-url">Button 1 URL</label><input id="broadcast-button-1-url" type="url" placeholder="https://…"></div></div><div class="button-pair"><div class="field"><label for="broadcast-button-2-text">Button 2 label</label><input id="broadcast-button-2-text" maxlength="64" placeholder="Optional"></div><div class="field"><label for="broadcast-button-2-url">Button 2 URL</label><input id="broadcast-button-2-url" type="url" placeholder="https://…"></div></div><div class="button-pair"><div class="field"><label for="broadcast-button-3-text">Button 3 label</label><input id="broadcast-button-3-text" maxlength="64" placeholder="Optional"></div><div class="field"><label for="broadcast-button-3-url">Button 3 URL</label><input id="broadcast-button-3-url" type="url" placeholder="https://…"></div></div><div class="broadcast-submit"><p>Delivery is automatically rate-limited for Telegram.</p><button id="broadcast-submit" type="submit" class="primary-btn">Send broadcast</button><p id="broadcast-result" class="field-help" aria-live="polite"></p></div></aside></form>
+        </section>
+
+        <section id="tab-payments" class="tab-panel">
+          <header class="page-heading"><div><h2>Payment methods</h2><p>Manage the accounts players see for deposits and withdrawals.</p></div></header>
+          <div class="split-workspace"><article class="work-panel"><div class="panel-heading"><div><h3>Configured methods</h3><p>Availability and supported operations</p></div></div><div id="payment-methods-list" class="record-list"></div></article><aside class="work-panel editor-panel"><div class="panel-heading"><div><h3>Add or update a method</h3><p>Changes affect the player payment flow</p></div></div><form id="payment-method-form" class="admin-form"><input type="hidden" id="pm-id"><div class="form-grid"><div class="field"><label for="pm-key">Provider key</label><input id="pm-key" required placeholder="telebirr"></div><div class="field"><label for="pm-name">Display name</label><input id="pm-name" required placeholder="Telebirr"></div><div class="field"><label for="pm-account">Account number or handle</label><input id="pm-account" required placeholder="09XXXXXXXX"></div><div class="field"><label for="pm-holder">Account holder</label><input id="pm-holder" placeholder="Account holder name"></div></div><div class="field"><label for="pm-instructions">Player instructions</label><textarea id="pm-instructions" rows="3" placeholder="Optional payment guidance…"></textarea></div><div class="toggle-stack"><div class="toggle-row"><div><strong>Active</strong><span>Visible to players</span></div><label class="toggle-switch"><input type="checkbox" id="pm-active" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label></div><div class="toggle-row"><div><strong>Accept deposits</strong><span>Players can submit money in</span></div><label class="toggle-switch"><input type="checkbox" id="pm-deposit" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label></div><div class="toggle-row"><div><strong>Allow withdrawals</strong><span>Players can receive payouts</span></div><label class="toggle-switch"><input type="checkbox" id="pm-withdrawal" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label></div></div><button class="primary-btn" type="submit">Save payment method</button></form></aside></div>
+        </section>
+
+        <section id="tab-admins" class="tab-panel">
+          <header class="page-heading"><div><h2>Admin access</h2><p>Review privileged accounts and grant access deliberately.</p></div></header><div class="split-workspace"><div><div id="super-admin-panel"></div><article class="work-panel"><div class="panel-heading"><div><h3>Current administrators</h3><p>Accounts with panel access</p></div></div><div id="admins-list" class="record-list"></div></article></div><aside class="work-panel editor-panel"><div class="panel-heading"><div><h3>Add an administrator</h3><p>The Telegram account will receive operational access</p></div></div><form id="add-admin-form" class="admin-form"><div class="field"><label for="new-admin-id">Telegram numeric ID</label><input id="new-admin-id" required inputmode="numeric" placeholder="e.g. 12345678"><p class="field-help">Confirm the ID with the person before granting access.</p></div><button class="primary-btn" type="submit">Add administrator</button></form></aside></div>
+        </section>
+
+        <section id="tab-control" class="tab-panel">
+          <header class="page-heading"><div><h2>Control Center</h2><p>Change games, money rules, content and switches as a draft, review it, then publish.</p></div></header>
+          <div id="cc-root"><p class="cc-note">Loading…</p></div>
+        </section>
+
+        <section id="tab-settings" class="tab-panel">
+          <header class="page-heading"><div><h2>Game configuration</h2><p>Configure each product independently with clear save boundaries.</p></div></header>
+          <div class="settings-workspace"><nav class="settings-nav" aria-label="Configuration products"><button class="active" data-settings-view="bingo"><span class="product-monogram bingo">B</span><span><strong>Melbete Bingo</strong><small>Rooms, economy, limits</small></span></button></nav>
+          <div class="settings-content">
+            <form id="settings-form" class="admin-form settings-view active" data-settings-panel="bingo">
+              <article class="settings-section"><div class="settings-heading"><div><h3>Room automation</h3><p>Bot participation is controlled independently for each room.</p></div></div><div class="room-settings-grid">
+                <section class="room-setting"><div class="toggle-row"><div><strong>Real Money · 10 ETB</strong><span>Uses withdrawable balances</span></div><label class="toggle-switch"><input type="checkbox" id="s-bot-enabled-real-10"><span class="toggle-track"><span class="toggle-thumb"></span></span></label></div><div class="inline-setting"><label for="s-max-bots-real-10">Maximum bots</label><input type="number" id="s-max-bots-real-10" min="1" max="50" placeholder="10"><button type="button" id="save-max-bots-real-10-btn" class="secondary-btn">Save</button></div></section>
+              </div><div class="master-control toggle-row"><div><strong>Player deposits</strong><span>Master switch for new deposit requests</span></div><label class="toggle-switch"><input type="checkbox" id="s-deposits-enabled" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label></div></article>
+              <article class="settings-section"><div class="settings-heading"><div><h3>Game economy</h3><p>Stakes, bonuses, payout ratio, and participation rules.</p></div></div><div class="form-grid settings-fields"><div class="field"><label for="s-stake">Real Money stake</label><input type="number" id="s-stake" placeholder="10"></div><div class="field"><label for="s-bonus">Registration bonus</label><input type="number" id="s-bonus" placeholder="50"></div><div class="field"><label for="s-referral-bonus">Referral bonus</label><input type="number" id="s-referral-bonus" placeholder="20"></div><div class="field"><label for="s-referral-cap">Referral cap</label><input type="number" id="s-referral-cap" min="0" placeholder="3"></div><div class="field"><label for="s-payout">Payout ratio</label><input type="number" step="0.01" id="s-payout" placeholder="0.9"></div><div class="field"><label for="s-cards-per-player">Cartelas per player</label><input type="number" id="s-cards-per-player" min="1" max="10" placeholder="2"></div><div class="field"><label for="s-min-players">Minimum cartelas to start</label><input type="number" id="s-min-players" min="1" placeholder="3"></div><div class="field"><label for="s-countdown">Lobby countdown (s)</label><input type="number" id="s-countdown" placeholder="30"></div><div class="field"><label for="s-draw-interval">Draw interval (s)</label><input type="number" id="s-draw-interval" placeholder="4"></div><div class="field"><label for="s-cartela-min">Cartela minimum</label><input type="number" id="s-cartela-min" min="1" placeholder="1"></div><div class="field"><label for="s-cartela-max">Cartela maximum</label><input type="number" id="s-cartela-max" min="10" max="1000" placeholder="250"></div><div class="field"><label for="s-timeout">Inactivity timeout (min)</label><input type="number" id="s-timeout" min="0" max="120" placeholder="0"></div></div></article>
+              <article class="settings-section"><div class="settings-heading"><div><h3>Money limits and support</h3><p>Player-facing transaction boundaries.</p></div></div><div class="form-grid settings-fields"><div class="field"><label for="s-min-dep">Minimum deposit</label><input type="number" id="s-min-dep" placeholder="50"></div><div class="field"><label for="s-max-dep">Maximum deposit</label><input type="number" id="s-max-dep" placeholder="5000"></div><div class="field"><label for="s-min-wd">Minimum withdrawal</label><input type="number" id="s-min-wd" placeholder="100"></div><div class="field"><label for="s-max-wd">Maximum withdrawal</label><input type="number" id="s-max-wd" placeholder="10000"></div><div class="field span-2"><label for="s-support-contact">Support Telegram username</label><input id="s-support-contact" placeholder="@melbete_support_1"></div></div></article><div class="settings-savebar"><span>Applies only to Melbete Bingo</span><button class="primary-btn" type="submit">Save Melbete Bingo settings</button></div>
+            </form>
+          </div></div>
+        </section>
+
+      </main>
+
+      <nav class="bottom-nav" aria-label="Primary mobile navigation"><button class="bottom-nav-item active" data-tab="dashboard"><span>⌂</span>Today</button><button class="bottom-nav-item" data-tab="deposits"><span>↓</span>Deposits</button><button class="bottom-nav-item" data-tab="withdrawals"><span>↑</span>Withdraw</button><button class="bottom-nav-item" data-tab="games"><span>◆</span>Games</button><button class="bottom-nav-item" id="more-nav-btn"><span>⋯</span>More</button></nav>
+      <div id="sheet-overlay" class="sheet-overlay"></div><aside id="more-sheet" class="more-sheet"><div class="sheet-grabber"></div><h2>More tools</h2><div class="sheet-grid"><button class="sheet-tile" data-tab="control"><span>✦</span>Control Center</button><button class="sheet-tile" data-tab="users"><span>◎</span>Players</button><button class="sheet-tile super-only" data-tab="agents"><span>⚑</span>Agents</button><button class="sheet-tile" data-tab="economy"><span>▥</span>Economy</button><button class="sheet-tile" data-tab="referrals"><span>◇</span>Referrals</button><button class="sheet-tile" data-tab="broadcast"><span>◁</span>Broadcast</button><button class="sheet-tile" data-tab="payments"><span>▰</span>Payments</button><button class="sheet-tile super-only" data-tab="settings"><span>⚙</span>Configuration</button><button class="sheet-tile super-only" data-tab="admins"><span>♢</span>Admin access</button></div><button id="logout-btn" class="sheet-logout">Log out</button></aside>
+    </div>
+  </div>
+
+  <div id="user-manage-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title"><div class="user-modal-card"><header class="modal-header"><div><span>Player management</span><h3 id="user-modal-title">Manage player</h3></div><button id="user-modal-close" class="modal-close-btn" aria-label="Close">×</button></header><nav class="user-modal-nav"><button class="user-modal-tab active" data-user-tab="overview">Overview</button><button class="user-modal-tab" data-user-tab="reset-balance">Balances</button><button class="user-modal-tab" data-user-tab="deposits">Deposits</button><button class="user-modal-tab" data-user-tab="withdrawals">Withdrawals</button></nav><div class="user-modal-body"><section id="um-tab-overview" class="um-tab-panel active"><div id="um-player-details" class="um-details-grid"></div><div id="um-action-buttons" class="um-actions-row"></div></section><section id="um-tab-reset-balance" class="um-tab-panel"><form id="um-reset-form" class="admin-form"><input type="hidden" id="um-reset-player-id"><div class="form-grid"><div class="field"><label for="um-balance">Real balance</label><input type="number" id="um-balance" required min="0"></div><div class="field"><label for="um-won-balance">Won balance</label><input type="number" id="um-won-balance" required min="0"></div><div class="field"><label for="um-bonus-balance">Bonus balance</label><input type="number" id="um-bonus-balance" required min="0"></div></div><div class="field"><label for="um-reset-note">Reason or audit note</label><input id="um-reset-note" placeholder="Manual correction"></div><button class="primary-btn" type="submit">Save balances</button></form></section><section id="um-tab-deposits" class="um-tab-panel"><div id="um-deposits-list" class="record-list"></div></section><section id="um-tab-withdrawals" class="um-tab-panel"><div id="um-withdrawals-list" class="record-list"></div></section></div></div></div>
+  <div id="admin-toast" class="toast hidden" role="status" aria-live="polite"></div>
+</div>
+<script src="/static/js/admin.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/admin-control.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/admin-live.js?v={{ APP_VERSION }}"></script>
+</body>
+</html>

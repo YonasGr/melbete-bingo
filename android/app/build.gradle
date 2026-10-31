@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing comes from environment variables so the key never lives in the repository.
+// Without them, the release APK is signed with the debug key: fine for installing, but you could not
+// later publish an update signed with a different key. Use your own keystore for real releases.
+def keystorePath = System.getenv('ANDROID_KEYSTORE_PATH')
+
+def appVersionCode = Integer.parseInt((project.findProperty('MELBETE_VERSION_CODE') ?: '1').toString())
+def appVersionName = (project.findProperty('MELBETE_VERSION_NAME') ?: '1.0.0').toString()
+// The bot username goes into generated Java source, so accept only what Telegram allows.
+def botUsername = (project.findProperty('MELBETE_BOT_USERNAME') ?: '').toString().trim().replaceAll('^@', '')
+if (botUsername && !(botUsername ==~ /[A-Za-z0-9_]{4,64}/)) {
+    throw new GradleException("MELBETE_BOT_USERNAME '${botUsername}' is not a valid Telegram username (letters, digits, underscore).")
+}
+
+android {
+    namespace 'et.melbete.bingo'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'et.melbete.bingo'
+        minSdk 24
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appVersionName
+        buildConfigField 'String', 'BOT_USERNAME', "\"${botUsername}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig = keystorePath ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+// No dependencies on purpose: a tiny, fast app with nothing to keep patched.

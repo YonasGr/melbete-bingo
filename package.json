@@ -1,0 +1,10 @@
+{
+	"private": true,
+	"scripts": {
+		"build:assets": "bash scripts/build_assets.sh"
+	},
+	"devDependencies": {
+		"esbuild": "^0.24.0",
+		"supabase": "^2.109.1"
+	}
+}
