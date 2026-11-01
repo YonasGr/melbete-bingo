@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     # split equally (see RoomService.settle_round_winners). 0 disables the feature.
     multi_winner_min_players: int = 10
     lobby_countdown_seconds: int = 30  # time players get to pick cartelas before auto-start
+    # Non-stop rounds: this many seconds after a round ends (winner screen shown) the server starts the
+    # next round by itself, without waiting for anyone to tap "Go to Lobby". 0 = old manual behaviour.
+    auto_next_round_seconds: int = 15
 
     # --- Player engagement (streaks, round nudges, win-back) ---------------
     # All house-funded rewards are bonus balance (playable, never withdrawable). Promotional

@@ -843,6 +843,7 @@ async function renderRoom(room) {
     state.claimedCardIds = new Set();
     state.claimingCardIds = new Set();
     state.isLeavingResults = false;
+    stopNextRoundCountdown();
     state.lastCalledCount = -1; // force a full called-numbers repaint on the new round
     setLobbyLocked(false);
     document.getElementById("winner-overlay").classList.add("hidden");
@@ -946,6 +947,7 @@ async function renderEnded(room, switchedRoom) {
   if (state.myCards.length) renderMyCards();
 
   await showResultsScreen(room);
+  startNextRoundCountdown(room);
 }
 
 /** Shows the draw screen (stats strip, called board, ball) for a running/ended round.
@@ -1248,7 +1250,50 @@ function handleWsMessage(msg) {
     case "round_ended":
       safeRefreshRoom();
       break;
+    // Non-stop rounds: the server has started the next round by itself. A player still parked on the
+    // results screen of the round that just finished is moved on to it (everyone else already follows
+    // the normal poll / "game_started" path).
+    case "new_round":
+      if (state.room?.state === "ended" && state.room.id === msg.previous_room_id) autoLeaveResults();
+      break;
   }
+}
+
+// Server-driven version of goToLobby(): the next round already exists, so just hide the results and render it.
+async function autoLeaveResults() {
+  if (state.isLeavingResults || state.room?.state !== "ended") return;
+  state.isLeavingResults = true;
+  stopNextRoundCountdown();
+  try {
+    const room = await api(`/api/session?track=${state.track}`);
+    document.getElementById("winner-overlay").classList.add("hidden");
+    await renderRoom(room);
+  } catch (e) {
+    state.isLeavingResults = false; // the player can still tap "Go to Lobby"
+  }
+}
+
+// "Next round starts in Ns" under the results buttons.
+let _nextRoundTimer = null;
+function stopNextRoundCountdown() {
+  if (_nextRoundTimer) { clearInterval(_nextRoundTimer); _nextRoundTimer = null; }
+  document.getElementById("winner-next-round")?.classList.add("hidden");
+}
+function startNextRoundCountdown(room) {
+  stopNextRoundCountdown();
+  const total = Number(room.auto_next_round_seconds || 0);
+  const el = document.getElementById("winner-next-round");
+  if (!el || total <= 0) return;
+  const serverNow = room.server_time ? new Date(room.server_time).getTime() : Date.now();
+  const skew = Date.now() - serverNow;
+  const endedAt = room.ended_at ? new Date(room.ended_at).getTime() + skew : Date.now();
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((endedAt + total * 1000 - Date.now()) / 1000));
+    el.textContent = left > 0 ? `Next round starts automatically in ${left}s` : "Starting the next round…";
+    el.classList.remove("hidden");
+  };
+  tick();
+  _nextRoundTimer = setInterval(tick, 1000);
 }
 
 // The results screen (winner, or a no-winner ending) - the single place

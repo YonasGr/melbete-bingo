@@ -18,6 +18,8 @@ file, get a Telegram bot token, set a few environment variables, run...
   setup walkthrough (schema, connection string, everything)
 - [DEPLOYMENT.md](DEPLOYMENT.md) - deploying to
   Render/Railway/Fly.io/Cloud Run/Azure
+- [WINDOWS_LOCAL_DEPLOYMENT.md](WINDOWS_LOCAL_DEPLOYMENT.md) - running the
+  complete stack locally on a Windows PC 24/7 with Docker Desktop
 - [API_REFERENCE.md](API_REFERENCE.md) - REST + WebSocket API reference.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - contribution guidelines
 
@@ -123,7 +125,7 @@ verify your setup actually works before deploying, are in
 ### 3. Configure environment variables
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 Edit `.env`:
@@ -171,15 +173,19 @@ to the `https://*.ngrok.io` URL it gives you before starting the bot.
 ## Running with Docker
 
 ```bash
-cp .env.example .env   # fill in real values first
+cp env.example .env   # fill in real values first
 docker compose up --build
 ```
 
-This starts two containers - the API and the bot - both talking to your
-real Supabase Postgres project (there are no local database containers to
-manage, though `docker-compose.yml` also has a commented-out local
-Postgres service if you'd rather develop fully offline). See
-`docker-compose.yml` for details.
+This starts the API, bot, and a local Postgres database. For a permanent
+Windows setup with automatic startup, backups, and optional Cloudflare HTTPS,
+follow [WINDOWS_LOCAL_DEPLOYMENT.md](WINDOWS_LOCAL_DEPLOYMENT.md).
+
+To also start the optional Cloudflare Tunnel, put its token in `.env` and run:
+
+```bash
+docker compose --profile public up --build -d
+```
 
 ## Testing
 

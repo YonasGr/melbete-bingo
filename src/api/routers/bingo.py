@@ -32,6 +32,8 @@ from src.api.dependencies import (
     manager,
 )
 
+from src.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["bingo"])
@@ -57,6 +59,8 @@ async def _room_summary(room, player_count: int = 0) -> dict:
         "winners": winners,
         "end_reason": getattr(room, "end_reason", None),
         "advanced": getattr(room, "advanced", False),
+        "auto_next_round_seconds": settings.auto_next_round_seconds,
+        "ended_at": room.updated_at.isoformat() if room.state == "ended" and getattr(room, "updated_at", None) else None,
         "stake_amount": room.stake_amount,
         "prize_pool": real_prize,
         "taken_cartelas": room.taken_cartelas,
@@ -93,30 +97,37 @@ async def _player_count_in_room(room_id: str) -> int:
     return await get_room_service().cards.count_players_by_room(room_id)
 
 
+def start_bot_fill(room_id: str) -> None:
+    """Start filling a waiting lobby with bots (once per room per process; one instance cluster-wide)."""
+    if room_id in _active_bot_fills:
+        return
+    _active_bot_fills.add(room_id)
+
+    async def _run_bot_fill() -> None:
+        from src.core import loop_lock
+
+        lock = f"botfill:{room_id}"
+        held = False
+        try:
+            # With several containers, only one may fill a given room with bots.
+            held = await loop_lock.try_acquire(lock, 300)
+            if held:
+                await get_bot_service().fill_room_with_bots(get_room_service(), room_id)
+        finally:
+            _active_bot_fills.discard(room_id)
+            if held:
+                await loop_lock.release(lock)
+
+    asyncio.create_task(_run_bot_fill())
+
+
 @router.get("/api/session")
 async def get_session(track: str = "real_10"):
     if track not in RoomService.TRACKS:
         raise HTTPException(status_code=400, detail=f"Unknown track '{track}'")
     room = await get_room_service().get_or_create_waiting_session(track)
-    if room.state == "waiting" and room.id not in _active_bot_fills:
-        _active_bot_fills.add(room.id)
-
-        async def _run_bot_fill(room_id: str):
-            from src.core import loop_lock
-
-            lock = f"botfill:{room_id}"
-            held = False
-            try:
-                # With several containers, only one may fill a given room with bots.
-                held = await loop_lock.try_acquire(lock, 300)
-                if held:
-                    await get_bot_service().fill_room_with_bots(get_room_service(), room_id)
-            finally:
-                _active_bot_fills.discard(room_id)
-                if held:
-                    await loop_lock.release(lock)
-
-        asyncio.create_task(_run_bot_fill(room.id))
+    if room.state == "waiting":
+        start_bot_fill(room.id)
     player_count = await _player_count_in_room(room.id)
     return await _room_summary(room, player_count)
 

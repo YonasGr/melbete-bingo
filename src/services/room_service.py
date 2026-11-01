@@ -296,6 +296,33 @@ class RoomService:
             # the latest round anymore) - hand back the single current room.
             return latest or await self._new_waiting_room(track)
 
+    async def auto_advance_track(self, track: str, min_age_seconds: float) -> Optional[Tuple[GameRoom, GameRoom]]:
+        """Keep a track's rounds running non-stop. Called by the server's round cycler.
+
+        - No round / cancelled round / already-advanced round -> make sure a fresh waiting lobby exists.
+        - A finished round nobody has clicked past yet -> once its winners are paid and it has been
+          showing for `min_age_seconds`, start the next waiting round (same path as a player's
+          "Go to Lobby", so it is idempotent and race-safe against players clicking at the same time).
+
+        Returns (finished_room, next_room) only when this call actually moved a finished round on."""
+        latest = await self.rooms.get_latest(track)
+        if latest is None or latest.state != "ended" or latest.advanced:
+            await self.get_or_create_waiting_session(track)
+            return None
+        if any(w.get("paid") is False for w in latest.winners):
+            latest = await self.pay_unpaid_winners(latest.id)
+            if any(w.get("paid") is False for w in latest.winners):
+                return None  # never move on while a payout is still outstanding
+        updated = latest.updated_at
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - updated).total_seconds() < min_age_seconds:
+            return None
+        next_room = await self.advance_round(latest.id)
+        if next_room.id == latest.id:
+            return None
+        return latest, next_room
+
     async def get_room(self, room_id: str) -> GameRoom:
         room = await self.rooms.get(room_id)
         if not room:

@@ -33,6 +33,7 @@ from src.api.dependencies import (
     _reshape_winners,
     _resolve_telegram_id,
     get_admin_service,
+    get_control_service,
     get_room_service,
     manager,
 )
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
         background = [
             asyncio.create_task(engagement_loop()),        # win-back + streak reminders (one instance at a time)
             asyncio.create_task(loop_supervisor()),        # keeps round loops alive on whichever instance owns them
+            asyncio.create_task(round_cycler()),           # non-stop rounds: a finished round is followed by a new one
             asyncio.create_task(reconciliation_loop()),    # daily wallet reconciliation report
             asyncio.create_task(agent_rewards_loop()),     # agent tiers + held reward payouts (one instance at a time)
         ]
@@ -306,6 +308,45 @@ async def loop_supervisor():
             await resume_active_room_if_needed()
         except Exception:  # noqa: BLE001
             logger.exception("Loop supervisor tick failed")
+
+
+CYCLER_LOCK_TTL = 15    # seconds; renewed every tick
+
+
+async def round_cycler():
+    """Non-stop rounds. On every track, as soon as a round has been showing its results for
+    `auto_next_round_seconds` the next waiting round is created (and filled with bots if enabled), and the
+    players still on the old results screen are told to move on. One instance at a time owns this."""
+    from src.api.routers.bingo import start_bot_fill
+
+    while True:
+        await asyncio.sleep(2)
+        seconds = settings.auto_next_round_seconds
+        if seconds <= 0:
+            continue
+        try:
+            if not await loop_lock.try_acquire("round_cycler", CYCLER_LOCK_TTL):
+                continue
+            service = get_room_service()
+            control = get_control_service()
+            for track in RoomService.TRACKS:
+                try:
+                    moved = await service.auto_advance_track(track, seconds)
+                    if moved:
+                        old_room, new_room = moved
+                        logger.info("Round cycler: %s (%s) -> new round %s", old_room.id, track, new_room.id)
+                        await manager.broadcast(old_room.id, {
+                            "type": "new_round", "track": track,
+                            "previous_room_id": old_room.id, "room_id": new_room.id,
+                        })
+                    if not await control.track_block(track):
+                        room = await service.rooms.get_latest(track)
+                        if room and room.state == "waiting":
+                            start_bot_fill(room.id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Round cycler failed for track %s", track)
+        except Exception:  # noqa: BLE001
+            logger.exception("Round cycler tick failed")
 
 
 async def lobby_countdown_task(room_id: str, initial_wait: float | None = None):
