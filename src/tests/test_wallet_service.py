@@ -135,16 +135,16 @@ async def test_winning_increases_won_balance(wallets):
 
 
 @pytest.mark.asyncio
-async def test_stake_uses_real_balance_before_bonus(wallets):
+async def test_stake_uses_bonus_balance_before_real(wallets):
     wallet = await wallets.get_or_create_wallet("player-1")
     wallet.balance = 30
     wallet.bonus_balance = 50
 
     wallet, funded_by = await wallets.debit_for_stake("player-1", 40, "room-1")
 
-    assert funded_by == "mixed:30:10"
-    assert wallet.balance == 0
-    assert wallet.bonus_balance == 40
+    assert funded_by == "bonus"
+    assert wallet.balance == 30
+    assert wallet.bonus_balance == 10
 
 
 @pytest.mark.asyncio

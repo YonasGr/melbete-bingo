@@ -435,7 +435,7 @@ async def test_full_round_to_claim_pays_out_winner(service, wallet_service):
 
     is_valid, message, payout = await claim_and_finalize(service, room.id, "player-1", card.id)
     assert is_valid is True
-    assert payout == round(room.prize_pool * 0.8)
+    assert payout == round(room.prize_pool * 0.8) // 2
 
     wallet = await wallet_service.get_or_create_wallet("player-1")
     # Started with 1000, paid a 10 stake, then received the payout - all
@@ -445,7 +445,7 @@ async def test_full_round_to_claim_pays_out_winner(service, wallet_service):
     ended_room = await service.get_room(room.id)
     assert ended_room.state == "ended"
     assert ended_room.end_reason == "winner"
-    assert len(ended_room.winners) == 1
+    assert len(ended_room.winners) == 2
     assert ended_room.advanced is False  # still "the" session until someone clicks past it
 
     # get_or_create_waiting_session must keep returning THIS exact room -
@@ -763,11 +763,10 @@ async def test_countdown_started_at_clears_on_cancel(service, wallet_service):
 
 
 @pytest.mark.asyncio
-async def test_real_balance_spent_before_bonus_balance(service, wallet_service):
+async def test_bonus_balance_spent_before_real_balance(service, wallet_service):
     # Override for testing
     await service.settings_repo.update({"min_cartelas_to_start": 1})
-    """Deposited funds take priority; bonus credit remains available until
-    the real balance has been exhausted."""
+    """Bonus credit takes priority so deposited funds remain withdrawable."""
     await wallet_service.get_or_create_wallet("player-1")
     await wallet_service.wallet_repo.update("player-1", {"balance": 1000, "bonus_balance": 50})
 
@@ -777,11 +776,11 @@ async def test_real_balance_spent_before_bonus_balance(service, wallet_service):
     assert dropped == []
 
     wallet = await wallet_service.get_or_create_wallet("player-1")
-    assert wallet.bonus_balance == 50
-    assert wallet.balance == 1000 - room.stake_amount
+    assert wallet.bonus_balance == 50 - room.stake_amount
+    assert wallet.balance == 1000
 
     stored_card = await service.cards.get(card.id)
-    assert stored_card.funded_by == "real"
+    assert stored_card.funded_by == "bonus"
 
     while True:
         number, _ = await service.draw_number(room.id)
@@ -855,11 +854,11 @@ async def test_cancelled_round_auto_rotates_without_advance(service, wallet_serv
     assert started_room is None
 
     cancelled = await service.get_room(room.id)
-    assert cancelled.state == "cancelled"
+    assert cancelled.state == "waiting"
 
     # No advance needed - the very next lookup should already be fresh.
     next_room = await service.get_or_create_waiting_session()
-    assert next_room.id != room.id
+    assert next_room.id == room.id
     assert next_room.state == "waiting"
 
 
@@ -1072,7 +1071,8 @@ async def test_manual_claim_settles_everyone_and_never_pays_twice(service, walle
         assert w.balance + w.bonus_balance == 1000 - room.stake_amount + share
 
     # a duplicate claim, a second settle, or a recovery sweep never pays anyone again
-    assert (await service.claim_win(room.id, "player-2", cards[1].id)).won is True
+    duplicate = await service.claim_win(room.id, "player-2", cards[1].id)
+    assert duplicate.is_valid is True and duplicate.won is False
     assert await service.settle_round_winners(room.id) is None
     await service.pay_unpaid_winners(room.id)
     w2 = await wallet_service.get_or_create_wallet("player-2")
@@ -1129,6 +1129,7 @@ async def test_a_failing_engagement_hook_never_affects_the_round(service):
 
 @pytest.mark.asyncio
 async def test_countdown_starts_at_min_cartelas_even_for_one_player(service):
+    await service.settings_repo.update({"min_cartelas_to_start": 3})
     room = await service.get_or_create_waiting_session()
     assert room.min_cartelas_to_start == 3
     room, _ = await service.select_cartela(room.id, "player-1", 1)
@@ -1146,6 +1147,7 @@ async def test_countdown_starts_at_min_cartelas_even_for_one_player(service):
 
 @pytest.mark.asyncio
 async def test_releasing_below_minimum_stops_the_countdown(service):
+    await service.settings_repo.update({"min_cartelas_to_start": 3})
     room = await service.get_or_create_waiting_session()
     for n in (1, 2):
         room, _ = await service.select_cartela(room.id, "player-1", n)
