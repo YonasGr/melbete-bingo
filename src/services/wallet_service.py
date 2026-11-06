@@ -14,8 +14,8 @@ Two balances per wallet:
   thumb on the scale of any game. Every draw uses the same fair RNG for
   every player, bonus-funded or not.
 
-When a stake is charged in the single real-money room, bonus credit is spent
-first, then real balance covers any remainder (the published deterministic
+When a stake is charged in the single real-money room, real balance is spent
+first, then bonus credit covers any remainder (the published deterministic
 funding rule). Whichever pool funded a card determines where
 its winnings land: bonus-funded cards pay out to bonus_balance (still
 locked), real-funded cards pay out to the real, withdrawable balance.
