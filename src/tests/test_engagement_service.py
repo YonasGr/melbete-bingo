@@ -190,12 +190,12 @@ async def test_nudge_goes_to_recent_players_outside_the_room_once_per_cooldown()
     assert await svc.nudge_round_starting("real_10", 10, ["in_room"], 30) == 2
     assert sorted(p for p, t, *_ in sent if t == "room_filling") == ["a", "b"]
     # a second lobby right away: batch gap blocks it ...
-    assert await svc.nudge_round_starting("real_10", 10, [], 30) == 0
+    assert await svc.nudge_round_starting("real_10", 10, ["in_room"], 30) == 0
     # ... and after the gap the same players are still inside their 6h cooldown
     clock.now += timedelta(minutes=11)
-    assert await svc.nudge_round_starting("real_10", 10, [], 30) == 0
+    assert await svc.nudge_round_starting("real_10", 10, ["in_room"], 30) == 0
     clock.now += timedelta(hours=7)
-    assert await svc.nudge_round_starting("real_10", 10, [], 30) == 2
+    assert await svc.nudge_round_starting("real_10", 10, ["in_room"], 30) == 2
 
 
 @pytest.mark.asyncio
