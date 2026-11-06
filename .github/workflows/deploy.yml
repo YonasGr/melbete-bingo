@@ -1,14 +1,4 @@
-name: Deploy to Azure
-
-# Push to main -> run tests -> build the image in Azure Container Registry ->
-# roll the api and bot Container Apps to the new image.
-#
-# One-time setup (see DEPLOY_AZURE.md, "CI/CD"): create the Azure resources with
-# scripts/deploy_azure.sh, then add an Entra app registration with a federated
-# credential for this repo (OIDC - no stored passwords) and set these on the
-# GitHub "production" environment:
-#   secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-#   vars:    AZURE_RESOURCE_GROUP (e.g. bingo-rg), NAME_PREFIX (e.g. melbetebingo)
+name: Deploy Melbete Bingo to shared AWS EC2
 
 on:
   push:
@@ -16,21 +6,19 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  id-token: write   # OIDC login to Azure
   contents: read
 
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false   # never cancel a mid-flight deploy
+  group: melbete-bingo-production
+  cancel-in-progress: false
+
+env:
+  PUBLIC_BASE_URL: https://melbete.yonasgr.me
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
-  # 1. Run tests
-  # ─────────────────────────────────────────────────────────────────────────
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    # Real Postgres so the wallet concurrency tests (src/tests/integration) actually run.
     services:
       postgres:
         image: postgres:16
@@ -41,81 +29,130 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U test"
+          --health-cmd "pg_isready -U test -d test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-
+          cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Run test suite
         env:
           TELEGRAM_BOT_TOKEN: test
           DATABASE_URL: postgresql://test:test@localhost:5432/test
           TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
-          REQUIRE_INTEGRATION_DB: "1"   # fail (not skip) if the DB is unreachable in CI
+          REQUIRE_INTEGRATION_DB: "1"
           SECRET_KEY: test-secret-key-for-ci
         run: pytest
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # 2. Build in ACR and roll out to Container Apps
-  # ─────────────────────────────────────────────────────────────────────────
   deploy:
-    name: Deploy to Azure Container Apps
+    name: Deploy to shared EC2 host
     needs: test
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute image tag (short commit SHA)
+      - name: Compute image tag
         id: vars
-        run: echo "image_tag=$(echo ${{ github.sha }} | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        run: echo "image_tag=$(echo '${{ github.sha }}' | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
-      # Cache-bust static assets so browsers pick up each deploy immediately.
-      - name: Inject cache buster into HTML templates
+      - name: Inject static asset cache buster
         run: |
           sed -i -E 's@(/static/(css|js)/[^"]+\.(css|js))(\?v=[a-zA-Z0-9_-]*)?@\1?v=${{ steps.vars.outputs.image_tag }}@g' src/templates/*.html || true
 
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Fetch self-hosted fonts
-        run: bash scripts/fetch_fonts.sh || echo "::warning::fonts were not fetched; the app falls back to system fonts"
-
-      - name: Build image in ACR
-        id: acr
+      - name: Install SSH key
         run: |
-          ACR=$(az acr list -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
-          echo "name=$ACR" >> "$GITHUB_OUTPUT"
-          az acr build -r "$ACR" -t "bingo-app:${{ steps.vars.outputs.image_tag }}" -t bingo-app:latest .
+          mkdir -p ~/.ssh
+          printf '%s\n' '${{ secrets.EC2_SSH_PRIVATE_KEY }}' > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H '${{ secrets.EC2_HOST }}' >> ~/.ssh/known_hosts
 
-      - name: Roll out api and bot
+      - name: Sync source to EC2
         run: |
-          az extension add --name containerapp --upgrade -y
-          IMAGE="${{ steps.acr.outputs.name }}.azurecr.io/bingo-app:${{ steps.vars.outputs.image_tag }}"
-          for APP in api bot; do
-            az containerapp update -g "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              -n "${{ vars.NAME_PREFIX }}-$APP" --image "$IMAGE" -o none
-          done
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='.venv' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.pytest_cache' \
+            --exclude='uploads' \
+            --exclude='backups' \
+            --exclude='*.pem' \
+            --exclude='.env' \
+            -e "ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no" \
+            ./ ubuntu@${{ secrets.EC2_HOST }}:~/melbete-bingo/
 
-      - name: Wait for API readiness (database reachable)
+      - name: Write production environment
         run: |
-          FQDN=$(az containerapp show -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ vars.NAME_PREFIX }}-api" \
-                 --query properties.configuration.ingress.fqdn -o tsv)
+          ssh -i ~/.ssh/ec2_key ubuntu@${{ secrets.EC2_HOST }} << 'ENDSSH'
+          umask 077
+          cat > ~/melbete-bingo/.env << 'EOF'
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_USERNAME=${{ secrets.TELEGRAM_BOT_USERNAME }}
+          TELEGRAM_GAME_SHORT_NAME=bingo
+          PUBLIC_BASE_URL=${{ env.PUBLIC_BASE_URL }}
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          DB_USE_PREPARED_STATEMENTS=true
+          DB_POOL_MIN_SIZE=2
+          DB_POOL_MAX_SIZE=20
+          DB_COMMAND_TIMEOUT_SECONDS=15
+          SECRET_KEY=${{ secrets.SECRET_KEY }}
+          APP_ENV=production
+          DEBUG=False
+          MAX_PLAYERS_PER_ROOM=100
+          DEFAULT_DRAW_INTERVAL=2
+          AUTO_MARK_ENABLED=False
+          GAME_STAKE_AMOUNT=10
+          FREE_CREDIT_AMOUNT=50
+          MIN_PLAYERS_TO_START=1
+          LOBBY_COUNTDOWN_SECONDS=30
+          MIN_DEPOSIT_AMOUNT=50
+          MAX_DEPOSIT_AMOUNT=70000
+          MIN_WITHDRAWAL_AMOUNT=200
+          MAX_WITHDRAWAL_AMOUNT=10000
+          SUPER_ADMIN_TELEGRAM_ID=${{ secrets.SUPER_ADMIN_TELEGRAM_ID }}
+          ADMIN_TOTP_SECRETS=${{ secrets.ADMIN_TOTP_SECRETS }}
+          ADMIN_TELEGRAM_IDS=${{ secrets.ADMIN_TELEGRAM_IDS }}
+          ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
+          PAYMENT_METHODS=Telebirr,CBE Birr
+          HOST=0.0.0.0
+          PORT=8000
+          EOF
+          ENDSSH
+
+      - name: Build and restart Melbete stack
+        run: |
+          ssh -i ~/.ssh/ec2_key ubuntu@${{ secrets.EC2_HOST }} << 'ENDSSH'
+          set -e
+          cd ~/melbete-bingo
+          docker network inspect bingo_default >/dev/null
+          IMAGE_TAG=${{ steps.vars.outputs.image_tag }} \
+            docker compose -f docker-compose.production.yml up -d --build --remove-orphans
+          docker image prune -a -f
+          docker builder prune -f --filter "until=24h"
+          ENDSSH
+
+      - name: Wait for public health check
+        run: |
           for i in $(seq 1 18); do
-            if curl -sf "https://$FQDN/ready" > /dev/null; then echo "API healthy after $((i * 10))s."; exit 0; fi
-            echo "  [$i/18] not ready yet..."; sleep 10
+            if curl -fsS "${{ env.PUBLIC_BASE_URL }}/health" > /dev/null; then
+              echo "API is healthy after $((i * 10))s."
+              exit 0
+            fi
+            echo "[$i/18] not ready; retrying in 10s..."
+            sleep 10
           done
-          echo "API did not report ready on /ready within 3 minutes."; exit 1
+          echo "API did not respond to /health within 3 minutes."
+          exit 1
+
+      - name: Print deployment diagnostics
+        if: always()
+        run: |
+          ssh -i ~/.ssh/ec2_key ubuntu@${{ secrets.EC2_HOST }} \
+            "cd ~/melbete-bingo && docker compose -f docker-compose.production.yml ps && docker compose -f docker-compose.production.yml logs --tail=30"

@@ -20,6 +20,8 @@ file, get a Telegram bot token, set a few environment variables, run...
   Render/Railway/Fly.io/Cloud Run/Azure
 - [WINDOWS_LOCAL_DEPLOYMENT.md](WINDOWS_LOCAL_DEPLOYMENT.md) - running the
   complete stack locally on a Windows PC 24/7 with Docker Desktop
+- [AWS_SHARED_HOST_DEPLOYMENT.md](AWS_SHARED_HOST_DEPLOYMENT.md) - deploying
+  alongside the live Safari-Games AWS host
 - [API_REFERENCE.md](API_REFERENCE.md) - REST + WebSocket API reference.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - contribution guidelines
 

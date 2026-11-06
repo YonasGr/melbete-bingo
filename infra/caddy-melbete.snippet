@@ -1,0 +1,7 @@
+# Add this block to the existing Safari-Games Caddyfile on the EC2 host.
+# Safari's Caddy container must be attached to bingo_default (the default
+# network created by docker compose in ~/bingo).
+
+melbete.yonasgr.me {
+    reverse_proxy melbete-api:8000
+}
