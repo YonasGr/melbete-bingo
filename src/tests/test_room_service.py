@@ -407,7 +407,7 @@ async def test_charge_and_start_cancels_if_nobody_can_pay(service, wallet_servic
     assert started_room is None
     assert dropped == ["player-1"]
     room = await service.get_room(room.id)
-    assert room.state == "waiting"
+    assert room.state == "cancelled"
     assert room.taken_cartelas == []
 
 
@@ -767,7 +767,7 @@ async def test_countdown_started_at_clears_on_cancel(service, wallet_service):
     await service.charge_and_start(room.id)  # nobody can pay -> cancel_round
 
     room = await service.get_room(room.id)
-    assert room.state == "waiting"
+    assert room.state == "cancelled"
     assert room.countdown_started_at is None
 
 
