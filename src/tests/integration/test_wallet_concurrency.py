@@ -141,7 +141,14 @@ async def test_idempotent_request_executes_once_under_concurrency(pg):
 
     results = await asyncio.gather(*[call() for _ in range(N)])
     assert len(runs) == 1
-    assert sum(r == {"transaction_id": "t-1"} for r in results) == 1
+    # Depending on scheduling, a concurrent request can arrive while the
+    # handler is running (409) or just after it completed (cached replay).
+    # Both are valid as long as only one handler executed.
+    assert all(
+        result == {"transaction_id": "t-1"} or getattr(result, "status_code", None) == 409
+        for result in results
+    )
+    assert any(result == {"transaction_id": "t-1"} for result in results)
     # after completion, every retry replays the stored response without running the handler
     assert await call() == {"transaction_id": "t-1"}
     assert len(runs) == 1
