@@ -781,7 +781,7 @@ async def test_bonus_balance_spent_before_real_balance(service, wallet_service, 
 
     wallet = await wallet_service.get_or_create_wallet("player-1")
     assert wallet.balance == 1000 - room.stake_amount + payout
-    assert wallet.won_balance == 0
+    assert wallet.won_balance == payout
     assert wallet.bonus_balance == 50
 
 
