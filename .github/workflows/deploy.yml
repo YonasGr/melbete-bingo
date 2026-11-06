@@ -129,3 +129,8 @@ jobs:
           done
           echo "Melbete API did not become healthy."
           exit 1
+
+      - name: Collect deployment diagnostics
+        if: failure()
+        run: |
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "cd $DEPLOY_PATH && docker compose -f docker-compose.production.yml ps && docker compose -f docker-compose.production.yml logs --tail=120 api bot && docker network inspect bingo_default"
