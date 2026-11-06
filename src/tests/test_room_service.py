@@ -583,7 +583,6 @@ async def test_duplicate_claim_from_same_winner_gets_friendly_message(service):
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
     room, _ = await service.select_cartela(room.id, "player-2", 2)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -647,6 +646,7 @@ async def test_ended_round_stays_visible_until_explicitly_advanced(service):
     call (the "Go to Lobby" button) may replace it."""
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
+    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -894,6 +894,7 @@ async def test_pool_exhausted_never_ends_the_round(service, wallet_service):
     await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
+    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
