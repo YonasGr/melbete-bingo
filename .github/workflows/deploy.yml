@@ -91,7 +91,8 @@ jobs:
             printf 'APP_ENV=production\nDEBUG=False\nHOST=0.0.0.0\nPORT=8000\n'
           } > "$env_file"
           ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "mkdir -p $DEPLOY_PATH"
-          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "git -C $DEPLOY_PATH init -q; git -C $DEPLOY_PATH remote remove origin 2>/dev/null || true; git -C $DEPLOY_PATH remote add origin https://github.com/${{ github.repository }}.git; git -C $DEPLOY_PATH fetch --depth=1 origin ${{ github.sha }}; git -C $DEPLOY_PATH checkout -f FETCH_HEAD"
+          set -o pipefail
+          git archive --format=tar HEAD | ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "tar -xf - -C $DEPLOY_PATH"
           ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "mkdir -p $DEPLOY_PATH/uploads"
           ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "cat > $DEPLOY_PATH/.env" < "$env_file"
           rm -f "$env_file"
