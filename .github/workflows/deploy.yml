@@ -118,6 +118,26 @@ jobs:
           docker restart bingo-caddy
           REMOTE
 
+      - name: Verify API inside EC2 Docker network
+        run: |
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          for attempt in $(seq 1 18); do
+            if docker run --rm --network bingo_default curlimages/curl:8.10.1 \
+              --fail --silent --show-error --max-time 10 http://melbete-api:8000/health >/dev/null; then
+              echo "Melbete API is reachable on bingo_default."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Melbete API is not reachable on bingo_default."
+          docker compose -f "$HOME/melbete-bingo/docker-compose.production.yml" ps
+          docker compose -f "$HOME/melbete-bingo/docker-compose.production.yml" logs --tail=200 api
+          docker inspect melbete-api --format '{{json .State}}'
+          docker network inspect bingo_default
+          exit 1
+          REMOTE
+
       - name: Verify public API
         run: |
           for attempt in $(seq 1 18); do
