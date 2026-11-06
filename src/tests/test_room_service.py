@@ -763,7 +763,7 @@ async def test_countdown_started_at_clears_on_cancel(service, wallet_service):
 
 
 @pytest.mark.asyncio
-async def test_bonus_balance_spent_before_real_balance(service, wallet_service):
+async def test_bonus_balance_spent_before_real_balance(service, wallet_service, monkeypatch):
     # Override for testing
     await service.settings_repo.update({"min_cartelas_to_start": 1})
     """Bonus credit takes priority so deposited funds remain withdrawable."""
@@ -782,6 +782,10 @@ async def test_bonus_balance_spent_before_real_balance(service, wallet_service):
     stored_card = await service.cards.get(card.id)
     assert stored_card.funded_by == "bonus"
 
+    # Keep this unit test isolated from the real leaderboard repository.
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(wallet_service, "_note_bonus_win", AsyncMock())
+
     while True:
         number, _ = await service.draw_number(room.id)
         if number is None:
@@ -791,9 +795,9 @@ async def test_bonus_balance_spent_before_real_balance(service, wallet_service):
     assert is_valid is True
 
     wallet = await wallet_service.get_or_create_wallet("player-1")
-    assert wallet.balance == 1000 - room.stake_amount + payout
-    assert wallet.won_balance == payout
-    assert wallet.bonus_balance == 50
+    assert wallet.balance == 1000
+    assert wallet.won_balance == 0
+    assert wallet.bonus_balance == 50 - room.stake_amount + payout
 
 
 @pytest.mark.asyncio
