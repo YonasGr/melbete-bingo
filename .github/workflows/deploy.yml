@@ -101,6 +101,23 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "cd $DEPLOY_PATH && IMAGE_TAG=${{ github.sha }} docker compose -f docker-compose.production.yml build --pull && IMAGE_TAG=${{ github.sha }} docker compose -f docker-compose.production.yml up -d --remove-orphans"
 
+      - name: Configure shared Caddy route
+        run: |
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          caddyfile="$HOME/bingo/Caddyfile"
+          if ! grep -Fq 'melbete.yonasgr.me {' "$caddyfile"; then
+            cat >> "$caddyfile" <<'CADDY'
+
+          melbete.yonasgr.me {
+              reverse_proxy melbete-api:8000
+          }
+          CADDY
+          fi
+          docker exec bingo-caddy caddy validate --config /etc/caddy/Caddyfile
+          docker restart bingo-caddy
+          REMOTE
+
       - name: Verify public API
         run: |
           for attempt in $(seq 1 18); do
