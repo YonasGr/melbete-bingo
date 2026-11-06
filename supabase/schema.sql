@@ -140,6 +140,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     room_id                   TEXT,
     admin_id                  TEXT,
     note                      TEXT,
+    sms_text                  TEXT,
+    payment_verification_url  TEXT,
     legal_name                TEXT,
     withdrawal_address        TEXT,
     notification_chat_id      TEXT,
