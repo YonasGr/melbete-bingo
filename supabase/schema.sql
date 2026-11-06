@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     payment_method            TEXT,
     screenshot_file_id        TEXT,
     screenshot_url            TEXT,
+    sms_text                  TEXT,
+    payment_verification_url  TEXT,
     room_id                   TEXT,
     admin_id                  TEXT,
     note                      TEXT,
