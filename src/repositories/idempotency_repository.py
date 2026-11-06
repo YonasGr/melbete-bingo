@@ -1,4 +1,5 @@
 """Postgres repository for idempotency keys (see src/api/idempotency.py)."""
+import json
 from typing import Optional
 
 from src.repositories.base import BaseRepository
@@ -22,7 +23,7 @@ class IdempotencyRepository(BaseRepository):
                 # the expected primary-key constraint.
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                    f"{player_id}\x00{scope}\x00{key}",
+                    json.dumps([player_id, scope, key], separators=(",", ":")),
                 )
                 row = await conn.fetchrow(
                     """
