@@ -51,6 +51,7 @@ class EngagementService:
         self._notify = notify
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
         self._last_nudge_batch: dict[str, datetime] = {}
+        self._recent_room_players: dict[str, tuple[datetime, set[str]]] = {}
 
     # -- plumbing ----------------------------------------------------------------------------
 
@@ -109,9 +110,13 @@ class EngagementService:
         if last and now - last < timedelta(minutes=cfg.engagement_nudge_batch_gap_minutes):
             return 0
         self._last_nudge_batch[track] = now
+        recent = self._recent_room_players.get(track)
+        prior_players = set(recent[1]) if recent and now - recent[0] < timedelta(hours=24) else set()
+        if players_in_room:
+            self._recent_room_players[track] = (now, set(players_in_room))
         candidates = await self.repo.nudge_candidates(
             now - timedelta(days=14), now - timedelta(hours=cfg.engagement_nudge_cooldown_hours),
-            list(players_in_room), cfg.engagement_nudge_max_recipients,
+            list(set(players_in_room) | prior_players), cfg.engagement_nudge_max_recipients,
         )
         cutoff = now - timedelta(hours=cfg.engagement_nudge_cooldown_hours)
         sent = 0

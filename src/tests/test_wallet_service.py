@@ -455,11 +455,11 @@ async def _seed(wallets, player_id, balance=0, won=0, bonus=0):
 
 
 @pytest.mark.asyncio
-async def test_mixed_stake_spends_bonus_first_and_records_split(wallets):
+async def test_mixed_stake_spends_real_first_and_records_split(wallets):
     await _seed(wallets, "p1", balance=100, bonus=30)
     wallet, funded_by = await wallets.debit_for_stake("p1", 50, "room-1", funding_mode="any")
-    assert funded_by == "mixed:20:30"
-    assert (wallet.balance, wallet.bonus_balance) == (80, 0)
+    assert funded_by == "real"
+    assert (wallet.balance, wallet.bonus_balance) == (50, 30)
 
 
 @pytest.mark.asyncio

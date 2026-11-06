@@ -38,16 +38,19 @@ def _disabled() -> bool:
 async def try_acquire(name: str, ttl_seconds: float) -> bool:
     """Acquire or renew the lease `name` for `ttl_seconds`. True only if this process now holds it."""
     global _table_ready
+    holder = HOLDER
     if _disabled():
         return True
     if _shutting_down:
         return False
     try:
         pool = await get_pool()
-        if not _table_ready:
-            await pool.execute(_DDL)
-            _table_ready = True
-        return await pool.fetchval(_ACQUIRE, name, HOLDER, float(ttl_seconds)) == HOLDER
+        # The pool can be rebound to a fresh test schema or database after
+        # module import, so the idempotent DDL must run for each connection
+        # context rather than relying on one process-global flag.
+        await pool.execute(_DDL)
+        _table_ready = True
+        return await pool.fetchval(_ACQUIRE, name, holder, float(ttl_seconds)) == holder
     except Exception:  # noqa: BLE001
         logger.exception("Could not confirm loop lock %r - treating it as not held", name)
         return False

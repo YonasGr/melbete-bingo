@@ -36,6 +36,7 @@ class ClaimOutcome:
     card: Optional[Card]
     payout: int = 0
     winner: Optional[dict] = None
+    pending: bool = False
 
 
 class RoomNotFoundError(Exception):
@@ -163,7 +164,7 @@ class RoomService:
             "stake_amount": s.stake_amount_real_10,
             "bot_enabled": s.bot_enabled_real_10,
             "max_bots": s.max_bots_real_10,
-            # Bonus-first is the published, deterministic cartela funding rule.
+                # Real balance is spent before bonus credit.
             # The prize pool is still split by actual funding source at settlement.
             "funding_mode": "any",
         }
@@ -450,12 +451,11 @@ class RoomService:
         return room
 
     async def cancel_round(self, room_id: str) -> GameRoom:
-        """Nobody could actually be charged at round start (e.g. everyone's
-        balance changed) - reset back to `waiting` with an empty board. No
-        refunds needed since nothing was ever charged during selection."""
+        """Mark an unstartable lobby cancelled, then let the next lookup
+        create a fresh waiting lobby. No refunds are needed."""
         await self.rooms.update(
             room_id,
-            {"taken_cartelas": [], "prize_pool": 0, "state": "waiting", "countdown_started_at": None},
+            {"taken_cartelas": [], "prize_pool": 0, "state": "cancelled", "countdown_started_at": None},
         )
         room = await self.get_room(room_id)
         cards = await self.cards.list_by_room(room_id)
@@ -630,12 +630,15 @@ class RoomService:
             # claim / double-tap) or somebody else, without re-verifying
             # a pattern against a round that no longer exists.
             already_won_by_me = any(w.get("player_id") == player_id for w in room.winners)
+            duplicate_multi_winner = already_won_by_me and len(room.winners) > 1
             msg = (
                 "Your win is already confirmed - check the results screen!"
                 if already_won_by_me
                 else "This round has already ended."
             )
-            return ClaimOutcome(True, msg, False, card)
+            return ClaimOutcome(True, msg, duplicate_multi_winner, card,
+                                payout=next((int(w.get("payout", 0)) for w in room.winners
+                                             if w.get("player_id") == player_id), 0))
 
         pattern_name = room.pattern.get("id", "any_line")
         is_valid, message = PatternVerifier.verify_claim(
