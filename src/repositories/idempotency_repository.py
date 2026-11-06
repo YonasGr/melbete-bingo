@@ -17,6 +17,13 @@ class IdempotencyRepository(BaseRepository):
         pool = await self._pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # Serialize claims for this logical key. This also protects
+                # installations whose pre-existing table was created without
+                # the expected primary-key constraint.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"{player_id}\x00{scope}\x00{key}",
+                )
                 row = await conn.fetchrow(
                     """
                     INSERT INTO idempotency_keys (player_id, scope, key, request_hash)

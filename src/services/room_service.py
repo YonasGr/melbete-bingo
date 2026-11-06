@@ -486,8 +486,11 @@ class RoomService:
         s = await self.settings_repo.get_or_create()
         required_cartelas = max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
         if len(cards) < required_cartelas:
-            # Defensive: the lobby timer only runs with enough cartelas. Leave
-            # the lobby open (waiting) instead of cancelling it.
+            # A countdown can expire after a player leaves or loses funds.
+            # Preserve the cancelled marker so the next lookup rotates this
+            # empty/unstartable lobby instead of exposing it indefinitely.
+            if cards:
+                await self.cancel_round(room_id)
             return None, []
         charged_cartelas: list[int] = []
         charged_cards: list[tuple[Card, str]] = []
