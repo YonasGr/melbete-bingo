@@ -53,6 +53,30 @@ CREATE USER melbete_app WITH PASSWORD '<strong-password>';
 CREATE DATABASE melbete_bingo OWNER melbete_app;
 ```
 
+If the database was created by another RDS role, the application role must
+also be granted ownership or schema creation privileges before the first
+startup. Connect to `melbete_bingo` as the RDS master/admin role and run:
+
+```sql
+ALTER DATABASE melbete_bingo OWNER TO melbete_app;
+ALTER SCHEMA public OWNER TO melbete_app;
+GRANT CONNECT ON DATABASE melbete_bingo TO melbete_app;
+GRANT USAGE, CREATE ON SCHEMA public TO melbete_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO melbete_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO melbete_app;
+```
+
+The `DATABASE_URL` user must be `melbete_app`, not the Safari `bingo` user.
+Verify the grants before starting the API:
+
+```sql
+SELECT
+  has_schema_privilege('melbete_app', 'public', 'USAGE') AS can_use,
+  has_schema_privilege('melbete_app', 'public', 'CREATE') AS can_create;
+```
+
+Both values must be `t`.
+
 Run the complete schema and required migrations against this new database
 before the first public deployment. The exact RDS connection string becomes
 the `DATABASE_URL` secret in this repository. It should use SSL, for example:
