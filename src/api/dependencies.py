@@ -96,6 +96,9 @@ def get_room_service() -> RoomService:
         from src.services.engagement_service import get_engagement_service
 
         _room_service.on_round_started = get_engagement_service().record_round_played
+        from src.services.leaderboard_service import get_leaderboard_service
+
+        _room_service.on_cards_charged = get_leaderboard_service().on_cards_charged
     return _room_service
 
 

@@ -63,9 +63,11 @@ async def _room_summary(room, player_count: int = 0) -> dict:
         "ended_at": room.updated_at.isoformat() if room.state == "ended" and getattr(room, "updated_at", None) else None,
         "stake_amount": room.stake_amount,
         "prize_pool": real_prize,
+        # While the lobby is open nothing has been charged yet, so show what the winners' pot would be right now.
+        "estimated_prize": real_prize if room.state != "waiting" else round(room.stake_amount * len(room.taken_cartelas or []) * payout_ratio),
         "taken_cartelas": room.taken_cartelas,
         "min_players_to_start": room.min_players_to_start,
-        "min_cartelas_to_start": getattr(room, "min_cartelas_to_start", 3),
+        "min_cartelas_to_start": getattr(room, "min_cartelas_to_start", 2),
         "countdown_seconds": room.countdown_seconds,
         "lobby_lock_seconds": RoomService.LOBBY_LOCK_SECONDS,
         "countdown_started_at": room.countdown_started_at.isoformat() if getattr(room, "countdown_started_at", None) else None,
@@ -223,6 +225,18 @@ async def get_room_card(room_id: str, card_id: str):
         "variant": card.variant,
         "cartela_number": card.cartela_number,
     }
+
+
+@router.get("/api/my-round/{player_id}")
+async def my_running_round(player_id: str, x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    """The round this player is in right now (they hold cartelas in a running game), so the hub can offer 'Return'."""
+    await _require_player_identity(player_id, x_telegram_init_data)
+    room = await get_room_service().rooms.running_for_player(player_id)
+    if room is None:
+        return {"round": None}
+    mine = await get_room_service().cards.list_by_room_and_owner(room.id, player_id)
+    return {"round": {"room_id": room.id, "cartelas": len(mine), "called": len(room.called_numbers or []),
+                      "stake_amount": room.stake_amount}}
 
 
 @router.get("/api/session/recent")

@@ -2513,3 +2513,15 @@ input:checked + .slider:before {
 .cartela-sheet-actions { display: flex; gap: 10px; margin-top: 12px; }
 .cartela-sheet-actions button { flex: 1; min-height: 44px; }
 .my-cartelas-count { margin: 6px 0; font-weight: 600; }
+
+/* In-app notification banner (melbete-core.js showNotice) */
+.notice-banner {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 10px); transform: translateX(-50%);
+  z-index: 10000; width: min(92vw, 420px); display: flex; flex-direction: column; gap: 2px; text-align: left;
+  padding: 10px 14px; border-radius: 14px; border: 1px solid oklch(100% 0 0 / 0.18);
+  background: oklch(28% 0.04 260); color: #fff; font: inherit; font-size: 0.85rem; line-height: 1.35;
+  box-shadow: 0 8px 28px oklch(0% 0 0 / 0.35); cursor: pointer;
+}
+.notice-banner.hidden { display: none; }
+.notice-banner strong { font-size: 0.9rem; }
+.notice-banner span { opacity: 0.9; }

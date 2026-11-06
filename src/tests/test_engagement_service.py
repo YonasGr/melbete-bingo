@@ -25,6 +25,11 @@ class FakeWallets:
     def __init__(self, fail_for=()):
         self.credits = []  # (player_id, amount, tx_type)
         self.fail_for = set(fail_for)
+        self.balances = {}  # player_id -> (real balance, bonus balance); default is plenty
+
+    async def get_or_create_wallet(self, player_id):
+        real, bonus = self.balances.get(player_id, (1000, 0))
+        return SimpleNamespace(balance=real, bonus_balance=bonus)
 
     async def credit_engagement_bonus(self, player_id, amount, tx_type, note):
         if player_id in self.fail_for:
@@ -254,3 +259,42 @@ async def test_streak_reminder_is_evening_only_once_a_day_and_names_the_next_rew
     assert (await svc.run_cycle())["reminders"] == 0  # once per day
     _pid, type_, data, _k = [x for x in sent if x[1] == "streak_at_risk"][0]
     assert data == {"streak": 2, "next_days": 3, "next_amount": 10}
+
+
+# ---------------------------------------------------------------------------
+# Low-balance nudge (after a round the player can no longer afford another cartela)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_low_balance_nudge_sent_once_per_day_to_players_below_the_threshold():
+    svc, repo, wallets, sent, clock = make(engagement_low_balance_threshold_etb=20)
+    wallets.balances = {"poor": (8, 5), "rich": (500, 0), "bonus_rich": (3, 30)}
+    await svc.record_round_played(["poor", "rich", "bonus_rich"])
+    low = [(pid, d) for pid, t, d, k in sent if t == "low_balance"]
+    assert low == [("poor", {"balance": 13, "threshold": 20})]   # bonus counts toward what they can still play
+    await svc.record_round_played(["poor"])                        # same day: the dedupe key is identical
+    keys = [k for pid, t, d, k in sent if t == "low_balance"]
+    assert len(keys) == 2 and keys[0] == keys[1]                   # the notifier drops the repeat by key
+
+
+@pytest.mark.asyncio
+async def test_low_balance_nudge_is_off_by_default_and_silent_in_quiet_hours():
+    svc, repo, wallets, sent, clock = make()                      # threshold not configured (0)
+    wallets.balances = {"poor": (1, 0)}
+    await svc.record_round_played(["poor"])
+    assert not [s for s in sent if s[1] == "low_balance"]
+    svc, repo, wallets, sent, clock = make(start=datetime(2026, 10, 19, 20, 0, tzinfo=UTC), engagement_low_balance_threshold_etb=20)  # 23:00 EAT
+    wallets.balances = {"poor": (1, 0)}
+    await svc.record_round_played(["poor"])
+    assert not [s for s in sent if s[1] == "low_balance"]
+
+
+@pytest.mark.asyncio
+async def test_low_balance_check_failure_never_breaks_the_round_bookkeeping():
+    svc, repo, wallets, sent, clock = make(engagement_low_balance_threshold_etb=20)
+
+    async def boom(pid):
+        raise RuntimeError("wallet down")
+
+    wallets.get_or_create_wallet = boom
+    await svc.record_round_played(["p1"])          # must not raise
+    assert repo.state["p1"]["streak_days"] == 1     # the streak was still recorded

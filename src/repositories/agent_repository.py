@@ -85,6 +85,70 @@ class AgentRepository(BaseRepository):
         )
         return Agent(**row) if row else None
 
+    async def set_commission(self, agent_id: str, commission_bps: int) -> Optional[Agent]:
+        row = await self._fetchrow(
+            "UPDATE agents SET commission_bps = $2, updated_at = $3 WHERE id = $1 RETURNING *",
+            agent_id, commission_bps, utcnow(),
+        )
+        return Agent(**row) if row else None
+
+    async def set_rewards_enabled(self, agent_id: str, enabled: bool) -> Optional[Agent]:
+        row = await self._fetchrow(
+            "UPDATE agents SET rewards_enabled = $2, updated_at = $3 WHERE id = $1 RETURNING *",
+            agent_id, bool(enabled), utcnow(),
+        )
+        return Agent(**row) if row else None
+
+    # ---------------------------------------------------------------- registration requests
+    async def create_application(self, player_id: str, note: str) -> Optional[dict]:
+        """None when this player already has a pending application (one open request each)."""
+        return await self._fetchrow(
+            """
+            INSERT INTO agent_applications (id, player_id, note, status, created_at)
+            VALUES ($1, $2, $3, 'pending', $4)
+            ON CONFLICT DO NOTHING
+            RETURNING *
+            """,
+            new_id(), player_id, note, utcnow(),
+        )
+
+    async def pending_application_count(self) -> int:
+        return int(await self._fetchval("SELECT COUNT(*) FROM agent_applications WHERE status = 'pending'") or 0)
+
+    async def latest_application(self, player_id: str) -> Optional[dict]:
+        return await self._fetchrow(
+            "SELECT * FROM agent_applications WHERE player_id = $1 ORDER BY created_at DESC LIMIT 1", player_id,
+        )
+
+    async def get_application(self, application_id: str) -> Optional[dict]:
+        return await self._fetchrow("SELECT * FROM agent_applications WHERE id = $1", application_id)
+
+    async def list_applications(self, status: Optional[str] = "pending", limit: int = 100) -> list[dict]:
+        return await self._fetch(
+            """
+            SELECT a.*, p.display_name, p.telegram_id, p.phone_number, p.is_banned, p.is_bot,
+                   COALESCE(w.lifetime_deposited, 0) AS lifetime_deposited
+            FROM agent_applications a
+            LEFT JOIN players p ON p.id = a.player_id
+            LEFT JOIN wallets w ON w.player_id = a.player_id
+            WHERE ($1::text IS NULL OR a.status = $1)
+            ORDER BY a.created_at DESC LIMIT $2
+            """,
+            status, limit,
+        )
+
+    async def resolve_application(self, application_id: str, status: str, admin_id: str, note: str) -> Optional[dict]:
+        """Claim a pending application. None if it was already reviewed (so two admins can never both act)."""
+        return await self._fetchrow(
+            """
+            UPDATE agent_applications
+               SET status = $2, reviewed_by = $3, review_note = $4, reviewed_at = $5
+             WHERE id = $1 AND status = 'pending'
+            RETURNING *
+            """,
+            application_id, status, admin_id, note, utcnow(),
+        )
+
     async def adjust_float_atomic(self, agent_id: str, delta: int, admin_id: str, note: str = "") -> Agent:
         """Add (delta > 0) or remove (delta < 0) float in ONE database transaction together with its
         ledger row. The `float_balance + delta >= 0` guard is in the UPDATE's WHERE clause, so
@@ -449,6 +513,7 @@ class AgentRepository(BaseRepository):
             "WHERE r.type = 'new_player' AND r.status <> 'cancelled' AND r.created_at <= $1 "
             "AND NOT EXISTS (SELECT 1 FROM agent_rewards x WHERE x.dedupe_key = 'retention:' || r.player_id) "
             "AND EXISTS (SELECT 1 FROM cards c WHERE c.owner_id = r.player_id AND c.created_at >= $2) "
+            "AND EXISTS (SELECT 1 FROM agents ag WHERE ag.id = r.agent_id AND ag.rewards_enabled) "
             "LIMIT $3", older_than, active_since, limit,
         )
         return [dict(r) for r in rows]

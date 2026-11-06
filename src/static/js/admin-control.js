@@ -136,7 +136,7 @@
         ${field("Platform commission", "settings.payout_ratio", { type: "pct", unit: "% of pool", min: 0, max: 50, hint: "Winner receives the rest. Maximum 50%." })}
         ${field("Lobby countdown", "settings.lobby_countdown_seconds", { unit: "seconds", min: 5, max: 300 })}
         ${field("Seconds between balls", "settings.draw_interval", { unit: "seconds", min: 1, max: 30 })}
-        ${field("Cartelas per player", "settings.cards_per_player", { min: 1, max: 50 })}
+        ${field("Cartelas per player", "settings.cards_per_player", { min: 1, max: 4 })}
         ${field("Cartelas needed to start", "settings.min_cartelas_to_start", { min: 1 })}
         ${field("Cartela numbers from", "settings.cartela_min", { min: 1 })}${field("Cartela numbers to", "settings.cartela_max", { min: 1 })}</div></article></div>`;
   }
@@ -358,7 +358,11 @@
     const rows = cc.snap.changes.map((c) => `<li><b>${esc(label(c.path))}</b>: ${esc(show(c.from))} → ${esc(show(c.to))}</li>`).join("");
     const ok = await confirmDialog("Publish changes", `<p>These go live for all players now:</p><ul class="cc-changes">${rows}</ul>`, "Publish now");
     if (!ok) return;
-    adopt(await api("/api/admin/control/publish", { method: "POST" })); toast("Published", "success"); render();
+    const snap = await api("/api/admin/control/publish", { method: "POST" });
+    adopt(snap);
+    const sync = snap && snap.lobby_sync, lobbyNames = { draw_interval: "draw interval", countdown_seconds: "countdown", min_cartelas_to_start: "minimum to start", stake_amount: "stake", cards_per_player: "cartelas per player", cartela_min: "cartela range", cartela_max: "cartela range" };
+    const list = (a) => [...new Set((a || []).map((k) => lobbyNames[k] || k))].join(", ");
+    toast(`Published.${sync && sync.applied && sync.applied.length ? ` Applied to the open lobby: ${list(sync.applied)}.` : ""}${sync && sync.deferred && sync.deferred.length ? ` From the next round: ${list(sync.deferred)}.` : ""}`, "success"); render();
   }
 
   document.addEventListener("click", async (e) => {

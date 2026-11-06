@@ -147,12 +147,15 @@ input::placeholder, textarea::placeholder { color: #8F8A7E; opacity: 1; }
 }
 .gv-cell { border: 1px solid rgb(255 255 255 / .05); }
 .gv-cell.called { box-shadow: 0 0 8px rgb(255 184 0 / .45), inset 0 1px 0 rgb(255 255 255 / .35); }
-.gv-cell.latest { animation: cx-latest 2.6s ease-in-out infinite; }
+/* Latest number: a steady ring + one cheap pop-in. No infinite box-shadow animation (it repaints every frame). */
+.gv-cell.latest { box-shadow: 0 0 0 2px #FFB800, 0 0 16px 4px rgb(255 201 51 / .8); animation: cx-pop .45s cubic-bezier(.2, .9, .25, 1.2) both; }
+@keyframes cx-pop { from { transform: scale(1.5); opacity: .4; } to { transform: scale(1.12); opacity: 1; } }
 @keyframes cx-latest {
   0%, 100% { box-shadow: 0 0 0 2px #FFB800, 0 0 10px 2px rgb(255 201 51 / .65); }
   50%      { box-shadow: 0 0 0 2px #FFB800, 0 0 20px 6px rgb(255 201 51 / .95); }
 }
-.gv-chip { border: 1px solid rgb(255 255 255 / .35); animation: cx-fade .4s ease both; }
+.gv-chip { border: 1px solid rgb(255 255 255 / .35); }
+.gv-chip:last-child { animation: cx-fade .4s ease both; }   /* only the newest call animates, older chips stay still */
 
 .gv-ball {
   background: radial-gradient(circle at 35% 30%, #fff 0%, #FFF4CF 52%, #FFD65C 100%);
@@ -160,7 +163,6 @@ input::placeholder, textarea::placeholder { color: #8F8A7E; opacity: 1; }
     0 0 0 8px #FFC933, 0 0 0 12px #E08A00,
     0 10px 28px rgb(0 0 0 / .5),
     0 0 36px 6px rgb(255 201 51 / .38), 0 0 64px 16px rgb(var(--cx-violet) / .22);
-  animation: cx-ball-glow 3.4s ease-in-out infinite;
 }
 @keyframes cx-ball-glow {
   0%, 100% { filter: drop-shadow(0 0 4px rgb(255 201 51 / .25)); }

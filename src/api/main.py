@@ -287,6 +287,10 @@ app.include_router(wallet.router)
 app.include_router(bingo.router)
 app.include_router(bonus.router)
 app.include_router(agent.router)
+from src.api.routers import leaderboard as leaderboard_router  # noqa: E402
+app.include_router(leaderboard_router.router)
+from src.api.routers import missions as missions_router  # noqa: E402
+app.include_router(missions_router.router)
 app.include_router(notifications.router)
 
 
@@ -435,6 +439,10 @@ async def auto_draw_task(room_id: str):
     from src.repositories.player_repository import PlayerRepository as _PR
     multi_round: Optional[bool] = None  # decided once: cards are fixed after the round starts
     lock = f"draw:{room_id}"
+    # Fixed cadence: schedule each draw against a monotonic deadline instead of sleeping a full interval
+    # AFTER the work, otherwise every database round-trip stretches the gap (interval + ~0.2-0.5s of drift).
+    loop = asyncio.get_running_loop()
+    next_at = loop.time()
     try:
         while True:
             # Single-writer guard: renew the Postgres lease before every draw; if another instance owns
@@ -465,8 +473,8 @@ async def auto_draw_task(room_id: str):
                 if multi_round is None and room_after.state == "running":
                     multi_round = await get_room_service().is_multi_winner_round(room_id)
                 if multi_round and room_after.state == "running":
-                    # More than 10 players: after every number, every player whose BINGO is
-                    # completed by this same last number wins together and shares the prize.
+                    # After every number, every player whose BINGO is completed by this same last
+                    # number wins together and shares the prize (any number of players).
                     ended = await get_room_service().settle_round_winners(room_id)
                     if ended is not None:
                         await manager.broadcast(room_id, {
@@ -478,81 +486,6 @@ async def auto_draw_task(room_id: str):
                             "Room %s ended on number %s with %d winner(s)",
                             room_id, ended.winners[0].get("winning_number"), len(ended.winners),
                         )
-                elif room_after.state == "running":
-                    cards = await get_room_service().cards.list_by_room(room_id)
-                    if cards:
-                        owner_ids = list({c.owner_id for c in cards})
-                        players = await _PR().list_by_ids(owner_ids)
-                        auto_players = {p.id for p in players} | {
-                            c.owner_id for c in cards if c.owner_id.startswith("bot_player_")
-                        }
-                        if auto_players:
-                            pattern_name = room_after.pattern.get("id", "any_line")
-                            from src.services.game_service import PatternVerifier
-
-                            completed = [
-                                card for card in cards
-                                if card.owner_id in auto_players
-                                and PatternVerifier.verify_pattern(
-                                    PatternVerifier.compute_effective_grid(card.grid, room_after.called_numbers),
-                                    pattern_name, room_after.variant,
-                                )
-                            ]
-
-                            if completed:
-                                recent_winner_ids = await get_room_service().claims.list_recent_winner_ids(
-                                    within_seconds=RECENT_WINNER_DEPRIORITIZE_SECONDS
-                                )
-                                not_recent = [c for c in completed if c.owner_id not in recent_winner_ids]
-                                recent = [c for c in completed if c.owner_id in recent_winner_ids]
-                                _tie_rng = secrets.SystemRandom()
-                                _tie_rng.shuffle(not_recent)
-                                _tie_rng.shuffle(recent)
-                                if len(completed) > 1:
-                                    logger.info(
-                                        "Auto-claim tie in room %s on draw %s: %d cards completed "
-                                        "simultaneously (%d recent-winner deprioritized); "
-                                        "resolved order: %s",
-                                        room_id, room_after.called_numbers[-1] if room_after.called_numbers else None,
-                                        len(completed), len(recent),
-                                        [c.owner_id for c in (not_recent + recent)],
-                                    )
-                                completed = not_recent + recent
-
-                            for card in completed:
-                                owner = next((p for p in players if p.id == card.owner_id), None)
-                                player_name = owner.display_name if owner else card.owner_id
-                                outcome = await get_room_service().claim_win(
-                                    room_id, card.owner_id, card.id, player_name=player_name
-                                )
-                                if outcome.won:
-                                    pattern_map = {
-                                        "any_line": "a Line, Diagonal, or 4 Corners",
-                                        "any_line_or_corners": "a Line, Diagonal, or 4 Corners",
-                                        "horizontal_line": "a Horizontal Line",
-                                        "vertical_line": "a Vertical Line",
-                                        "diagonal": "a Diagonal Line",
-                                        "four_corners": "4 Corners",
-                                        "full_house": "a Full House",
-                                    }
-                                    nice_pattern = pattern_map.get(pattern_name, pattern_name.replace("_", " ").title())
-                                    await manager.broadcast(room_id, {
-                                        "type": "winner_announced",
-                                        "player_id": card.owner_id,
-                                        "player_name": player_name,
-                                        "card": {"cartela_number": card.cartela_number, "grid": outcome.card.grid if outcome.card else card.grid},
-                                        "pattern_name": nice_pattern,
-                                        "payout": outcome.payout,
-                                        "prize_pool": outcome.winner.get("prize_pool", 0) if outcome.winner else 0,
-                                        "auto_claimed": True,
-                                    })
-                                    logger.info(
-                                        "Auto-claim: server claimed win for player %s on card %s in room %s",
-                                        card.owner_id, card.id, room_id
-                                    )
-                                    break
-                                elif outcome.is_valid and not outcome.won:
-                                    break
             except Exception:
                 logger.exception("Server-side auto-claim check failed for room %s", room_id)
 
@@ -563,7 +496,14 @@ async def auto_draw_task(room_id: str):
             if post_room.state != "running":
                 break
 
-            await asyncio.sleep(room.draw_interval)
+            next_at += max(float(room.draw_interval), 1.0)
+            delay = next_at - loop.time()
+            if delay < 0:
+                # Fell more than a whole interval behind (slow database, paused container): resync rather
+                # than calling several numbers back-to-back.
+                next_at = loop.time()
+                delay = 0.0
+            await asyncio.sleep(delay)
     finally:
         _active_draw_loops.discard(room_id)
         await loop_lock.release(lock)

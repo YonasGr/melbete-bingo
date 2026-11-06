@@ -140,7 +140,7 @@ class GameRoom(BaseModel):
     min_players_to_start: int = 2  # legacy, no longer used to start a round
     # A round starts (30s countdown, then charge + draw) once this many
     # CARTELAS are reserved - even if they all belong to one player.
-    min_cartelas_to_start: int = 3
+    min_cartelas_to_start: int = 2
     countdown_seconds: int = 30  # time players get to pick cartelas before auto-start
     # Cartela number range players can pick from.
     cartela_min: int = 1
@@ -303,7 +303,7 @@ class SystemSettings(BaseModel):
     # a lively game; set to 1 for testing via the admin panel.
     min_players_to_start: int = 5  # legacy, no longer used to start a round
     # Cartelas (not players) needed before the lobby countdown begins.
-    min_cartelas_to_start: int = 3
+    min_cartelas_to_start: int = 2
     # Cartela number range players can pick from (1-500 by default).
     # Admin-tunable so the game can be shrunk or expanded without redeploy.
     cartela_min: int = 1
@@ -429,6 +429,7 @@ class Agent(BaseModel):
     commission_balance: int = 0  # ETB earned, withdrawable through the normal approval flow
     tier_bps: int = 0  # rate earned from this month's volume; the rate paid is max(commission_bps, tier_bps)
     tier_label: str = ""
+    rewards_enabled: bool = True  # False = this agent earns no new-player / retention rewards (commission is unaffected)
     created_by: str
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

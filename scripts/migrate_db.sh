@@ -6,7 +6,7 @@
 # Usage:
 #   1. export SOURCE_DB_URL="postgresql://<admin-user>:<password>@<server-name>.postgres.database.azure.com:5432/<dbname>?sslmode=require"
 #   2. Make sure the local db container is up and has the schema applied
-#      (see LOCAL_MIGRATION_GUIDE.md section 1).
+#     .
 #   3. Run: ./scripts/migrate_db.sh
 #
 # Requires pg_dump/psql on the HOST (not in a container):
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-SOURCE_DB_URL="${SOURCE_DB_URL:?Set SOURCE_DB_URL to your Azure Postgres connection string first — see LOCAL_MIGRATION_GUIDE.md}"
+SOURCE_DB_URL="${SOURCE_DB_URL:?Set SOURCE_DB_URL to your Azure Postgres connection string first}"
 LOCAL_URL="${LOCAL_URL:-postgresql://bingo:bingo@localhost:5432/bingo}"
 
 DUMP_FILE="azure_db_dump_$(date +%Y%m%d_%H%M%S).sql"
@@ -40,4 +40,4 @@ done
 
 echo ""
 echo "Keep ${DUMP_FILE} somewhere safe (off this machine too) until you're"
-echo "fully confident in the local copy - see 'Backups' in LOCAL_MIGRATION_GUIDE.md."
+echo "fully confident in the local copy."

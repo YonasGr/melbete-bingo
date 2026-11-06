@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Nightly backup of the local `db` container's database. Meant to run via
-# cron (see LOCAL_MIGRATION_GUIDE.md "Backups" section for the crontab
-# line). Keeps the last 14 daily dumps and deletes older ones.
+# cron. Keeps the last 14 daily dumps and deletes older ones.
 
 set -euo pipefail
 

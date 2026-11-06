@@ -1,14 +1,14 @@
 from src.services.stake_math import plan_stake_debit
 
 
-def test_any_mode_spends_real_first_then_bonus():
+def test_any_mode_spends_bonus_first_then_real():
     split = plan_stake_debit(balance=100, won_balance=0, bonus_balance=30, amount=50, funding_mode="any")
-    assert (split.from_bonus, split.from_real, split.from_won) == (0, 50, 0)
-    assert split.funded_by == "real"
+    assert (split.from_bonus, split.from_real, split.from_won) == (30, 20, 0)
+    assert split.funded_by == "mixed:20:30"
 
 
 def test_any_mode_pure_bonus_and_pure_real():
-    assert plan_stake_debit(0, 0, 50, 40, "any").funded_by == "bonus"
+    assert plan_stake_debit(100, 0, 50, 40, "any").funded_by == "bonus"
     assert plan_stake_debit(100, 0, 0, 40, "any").funded_by == "real"
 
 

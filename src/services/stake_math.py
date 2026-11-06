@@ -19,7 +19,7 @@ def plan_stake_debit(
     """Work out how `amount` is paid, or return None if the wallet cannot cover it.
 
     - "bonus_only": paid entirely from bonus_balance.
-    - anything else ("any"): real balance first, then bonus balance for the rest.
+    - anything else ("any"): bonus balance first, then real balance for the rest.
     Within real balance, deposited money is spent before won_balance, so a
     player's withdrawable winnings are preserved as long as possible.
     """
@@ -32,8 +32,8 @@ def plan_stake_debit(
     else:
         if balance + bonus_balance < amount:
             return None
-        from_real = min(balance, amount)
-        from_bonus = amount - from_real
+        from_bonus = min(bonus_balance, amount)
+        from_real = amount - from_bonus
     deposited_portion = max(0, balance - won_balance)
     from_won = from_real - min(deposited_portion, from_real)
     if from_bonus == 0:

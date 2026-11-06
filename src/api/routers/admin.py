@@ -106,7 +106,7 @@ async def admin_deposit_screenshot(filename: str, admin_id: str = Depends(requir
 
 
 @router.post("/broadcasts")
-async def admin_broadcast(background_tasks: BackgroundTasks, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
+async def admin_broadcast(request: Request, background_tasks: BackgroundTasks, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
     from src.repositories.base import BaseRepository
     row = await BaseRepository()._fetchrow("SELECT status FROM broadcast_progress WHERE id = 'active'")
     if row and row["status"] in ("running", "cancelling"):
@@ -151,11 +151,12 @@ async def admin_broadcast(background_tasks: BackgroundTasks, payload: dict = Bod
             """)
 
     background_tasks.add_task(run_broadcast_task)
+    await _audit(request, admin_id, "broadcast.start", target_type="broadcast", target_id="active", summary="Started a broadcast")
     return {"status": "started", "message": "Broadcast started in background."}
 
 
 @router.post("/broadcasts/cancel")
-async def admin_cancel_broadcast(admin_id: str = Depends(require_admin_dep)):
+async def admin_cancel_broadcast(request: Request, admin_id: str = Depends(require_admin_dep)):
     from src.repositories.base import BaseRepository
     repo = BaseRepository()
     row = await repo._fetchrow("SELECT status FROM broadcast_progress WHERE id = 'active'")
@@ -168,6 +169,7 @@ async def admin_cancel_broadcast(admin_id: str = Depends(require_admin_dep)):
         WHERE id = 'active'
     """)
     await BroadcastService().cancel()
+    await _audit(request, admin_id, "broadcast.cancel", target_type="broadcast", target_id="active", summary="Cancelled the broadcast")
     return {"status": "cancelled", "message": "Broadcast cancelled and state reset."}
 
 
@@ -298,7 +300,7 @@ async def admin_list_payment_methods(admin_id: str = Depends(require_admin_dep))
 
 
 @router.post("/payment-methods")
-async def admin_upsert_payment_method(payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
+async def admin_upsert_payment_method(request: Request, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
     method = await get_admin_service().upsert_payment_method(
         key=payload.get("key"),
         name=payload.get("name"),
@@ -311,12 +313,15 @@ async def admin_upsert_payment_method(payload: dict = Body(...), admin_id: str =
         display_order=payload.get("display_order", 0),
         method_id=payload.get("id"),
     )
+    await _audit(request, admin_id, "payment_method.save", target_type="payment_method", target_id=method.id,
+                 summary=f"{payload.get('key')} / {payload.get('name')}", after={"active": payload.get("active", True), "key": payload.get("key")})
     return {"id": method.id}
 
 
 @router.delete("/payment-methods/{method_id}")
-async def admin_delete_payment_method(method_id: str, admin_id: str = Depends(require_admin_dep)):
+async def admin_delete_payment_method(method_id: str, request: Request, admin_id: str = Depends(require_admin_dep)):
     await get_admin_service().delete_payment_method(method_id)
+    await _audit(request, admin_id, "payment_method.delete", target_type="payment_method", target_id=method_id, summary="Deleted payment method")
     return {"message": "Payment method deleted"}
 
 
@@ -342,6 +347,10 @@ async def admin_update_settings(request: Request, payload: dict = Body(...), req
     changed = {k: after[k] for k in after if k != "updated_at" and before.get(k) != after[k]}
     await _audit(request, requester, "settings.update", target_type="config", target_id="settings",
                  summary=f"{len(changed)} setting(s) changed", before={k: before.get(k) for k in changed}, after=changed)
+    # Settings are read when a lobby is created - push them into the one that is already open too.
+    from src.services.lobby_sync import sync_waiting_lobbies
+
+    after["lobby_sync"] = await sync_waiting_lobbies()
     return after
 
 
@@ -500,10 +509,22 @@ async def admin_reject_deposit(transaction_id: str, request: Request, payload: d
     return {"status": txn.status}
 
 
+async def _big_withdrawal_threshold() -> int:
+    """The Control Center 'large withdrawal' amount (0 = off). Same value the Telegram alert uses."""
+    try:
+        from src.services.control_service import get_control_service
+
+        cfg = await get_control_service().get_published()
+        return int(cfg.get("alerts", {}).get("big_withdrawal_amount", 0) or 0)
+    except Exception:  # noqa: BLE001 - the flag is a convenience; the list must still load
+        return 0
+
+
 @router.get("/withdrawals/pending")
 async def admin_pending_withdrawals(admin_id: str = Depends(require_admin_dep)):
     txns = await get_wallet_service().list_pending_withdrawals()
     player_repo = PlayerRepository()
+    threshold = await _big_withdrawal_threshold()
     out = []
     for t in txns:
         p = await player_repo.get_by_id(t.player_id)
@@ -511,9 +532,9 @@ async def admin_pending_withdrawals(admin_id: str = Depends(require_admin_dep)):
             "id": t.id, "player_id": t.player_id, "player_name": p.display_name if p else t.player_id,
             "amount": abs(t.amount), "payment_method": t.payment_method, "legal_name": t.legal_name,
             "withdrawal_address": t.withdrawal_address, "created_at": t.created_at.isoformat(),
-            "status": "pending",
+            "status": "pending", "is_large": bool(threshold) and abs(t.amount) >= threshold,
         })
-    return {"withdrawals": out}
+    return {"withdrawals": out, "big_threshold": threshold}
 
 
 @router.get("/withdrawals/history")
@@ -559,6 +580,61 @@ async def admin_reject_withdrawal(transaction_id: str, request: Request, payload
     await _audit(request, admin_id, "withdrawal.reject", target_type="transaction", target_id=transaction_id,
                  summary=f"{abs(txn.amount)} ETB refunded to {txn.player_id}", after={"status": txn.status, "note": payload.get("note", "")})
     return {"status": txn.status}
+
+
+@router.get("/reconciliation")
+async def admin_reconciliation(days: int = 14, admin_id: str = Depends(require_perm("audit.view"))):
+    """Daily money screen: wallet integrity checks (same as the 03:00 report) + per-day deposits/withdrawals."""
+    from src.services.reconciliation import snapshot
+
+    return await snapshot(days)
+
+
+async def _export_csv(request: Request, admin_id: str, kind: str, status: Optional[str], start: Optional[str], end: Optional[str]) -> Response:
+    from src.services import finance_export as fx
+
+    if status not in (None, "", "all", "approved", "rejected", "pending"):
+        raise HTTPException(status_code=400, detail="status must be all, pending, approved or rejected")
+    try:
+        lo, hi, start_label, end_label = fx.parse_range(start, end)
+    except fx.ExportRangeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    txns = await get_wallet_service().transaction_repo.list_for_export(
+        kind, lo, hi, None if status in (None, "", "all") else status, limit=fx.MAX_EXPORT_ROWS + 1,
+    )
+    if len(txns) > fx.MAX_EXPORT_ROWS:
+        raise HTTPException(status_code=400, detail=f"More than {fx.MAX_EXPORT_ROWS:,} rows - choose a shorter date range")
+    names = {p.id: p.display_name for p in await PlayerRepository().list_by_ids({t.player_id for t in txns})}
+    rows = [{
+        "id": t.id, "created_at": t.created_at, "resolved_at": t.resolved_at, "status": fx.status_of(t.type),
+        "player_id": t.player_id, "player_name": names.get(t.player_id, ""), "amount": abs(t.amount),
+        "payment_method": t.payment_method, "payment_verification_url": t.payment_verification_url,
+        "legal_name": t.legal_name, "withdrawal_address": t.withdrawal_address,
+        "reviewed_by": t.admin_id, "note": t.note,
+    } for t in txns]
+    await _audit(request, admin_id, f"export.{kind}s", target_type="export", target_id=f"{start_label}..{end_label}",
+                 summary=f"{len(rows)} rows, status={status or 'all'}, {start_label} to {end_label}")
+    filename = f"melbete_{kind}s_{start_label}_to_{end_label}.csv"
+    return Response(
+        content=fx.build_csv(rows, kind), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
+    )
+
+
+@router.get("/deposits/export.csv")
+async def admin_export_deposits(
+    request: Request, status: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,
+    admin_id: str = Depends(require_perm("audit.view")),
+):
+    return await _export_csv(request, admin_id, "deposit", status, start, end)
+
+
+@router.get("/withdrawals/export.csv")
+async def admin_export_withdrawals(
+    request: Request, status: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,
+    admin_id: str = Depends(require_perm("audit.view")),
+):
+    return await _export_csv(request, admin_id, "withdrawal", status, start, end)
 
 
 @router.get("/users")
@@ -711,7 +787,7 @@ async def admin_list_games(limit: int = 50, state: Optional[str] = None, admin_i
             "pattern": room.pattern,
             "cards_per_player": room.cards_per_player,
             "min_players_to_start": room.min_players_to_start,
-            "min_cartelas_to_start": getattr(room, "min_cartelas_to_start", 3),
+            "min_cartelas_to_start": getattr(room, "min_cartelas_to_start", 2),
             "countdown_seconds": room.countdown_seconds,
             "countdown_started_at": room.countdown_started_at.isoformat() if room.countdown_started_at else None,
             "draw_interval": room.draw_interval,
@@ -732,6 +808,7 @@ async def admin_list_games(limit: int = 50, state: Optional[str] = None, admin_i
 @router.post("/games/{room_id}/terminate")
 async def admin_terminate_game(
     room_id: str,
+    request: Request,
     payload: dict = Body(default={}),
     requester: str = Depends(require_super_admin_dep),
 ):
@@ -758,6 +835,7 @@ async def admin_terminate_game(
     })
 
     logger.warning("Admin %s terminated running game %s: %s", requester, room_id, reason)
+    await _audit(request, requester, "game.terminate", target_type="game", target_id=room_id, summary=reason)
 
     return {
         "success": True,
@@ -770,6 +848,7 @@ async def admin_terminate_game(
 @router.delete("/games/{room_id}")
 async def admin_delete_game(
     room_id: str,
+    request: Request,
     requester: str = Depends(require_super_admin_dep),
 ):
     try:
@@ -787,6 +866,7 @@ async def admin_delete_game(
     await get_room_service().rooms._execute("DELETE FROM game_rooms WHERE id = $1", room_id)
 
     logger.warning("Admin %s deleted waiting room %s", requester, room_id)
+    await _audit(request, requester, "game.delete", target_type="game", target_id=room_id, summary="Deleted waiting room")
     return {"success": True, "message": "Waiting room deleted successfully."}
 
 
@@ -1001,17 +1081,19 @@ async def admin_agent_rewards(requester: str = Depends(require_super_admin_dep))
 
 
 @router.put("/agent-rewards/settings")
-async def admin_update_agent_reward_settings(payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
+async def admin_update_agent_reward_settings(request: Request, payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
     from src.services.agent_rewards import RewardInputError, get_agent_reward_service
 
     try:
-        return {"settings": await get_agent_reward_service().update_settings(requester, payload)}
+        settings_out = await get_agent_reward_service().update_settings(requester, payload)
     except RewardInputError as e:
         raise _reward_error(e)
+    await _audit(request, requester, "agent_rewards.settings", target_type="config", target_id="agent_rewards", summary="Updated agent reward settings", after=payload)
+    return {"settings": settings_out}
 
 
 @router.put("/agent-rewards/tiers")
-async def admin_update_agent_tiers(payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
+async def admin_update_agent_tiers(request: Request, payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
     """Body: {"tiers": [{"label": "Silver", "min_monthly_volume": 50000, "commission_percent": 4}, ...]}"""
     from src.services.agent_rewards import RewardInputError, get_agent_reward_service
 
@@ -1019,18 +1101,20 @@ async def admin_update_agent_tiers(payload: dict = Body(...), requester: str = D
         tiers = await get_agent_reward_service().set_tiers(requester, payload.get("tiers"))
     except RewardInputError as e:
         raise _reward_error(e)
+    await _audit(request, requester, "agent_rewards.tiers", target_type="config", target_id="agent_rewards", summary=f"Set {len(tiers)} reward tiers")
     return {"tiers": [{"label": t["label"], "min_monthly_volume": t["min_monthly_volume"],
                        "commission_percent": t["commission_bps"] / 100} for t in tiers]}
 
 
 @router.post("/agent-rewards/{reward_id}/cancel")
-async def admin_cancel_agent_reward(reward_id: str, requester: str = Depends(require_super_admin_dep)):
+async def admin_cancel_agent_reward(reward_id: str, request: Request, requester: str = Depends(require_super_admin_dep)):
     from src.services.agent_rewards import RewardInputError, get_agent_reward_service
 
     try:
         await get_agent_reward_service().cancel_reward(requester, reward_id)
     except RewardInputError as e:
         raise _reward_error(e)
+    await _audit(request, requester, "agent_rewards.cancel", target_type="agent_reward", target_id=reward_id, summary="Cancelled agent reward")
     return {"success": True}
 
 
@@ -1043,8 +1127,88 @@ async def admin_agent_ledger(agent_id: str, requester: str = Depends(require_sup
     return {"ledger": [e.model_dump(mode="json") for e in entries]}
 
 
+def _application_json(a: dict) -> dict:
+    out = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in dict(a).items()}
+    out["telegram_id"] = out.get("telegram_id") or str(out.get("player_id", "")).replace("tg_", "")
+    return out
+
+
+@router.get("/agent-applications")
+async def admin_list_agent_applications(status: str = "pending", requester: str = Depends(require_super_admin_dep)):
+    """Players asking to become agents. status = pending (default) | approved | rejected | all."""
+    try:
+        rows = await get_agent_service().list_applications(None if status == "all" else status)
+    except AgentError as e:
+        raise _agent_error(e)
+    return {"applications": [_application_json(r) for r in rows]}
+
+
+@router.post("/agent-applications/{application_id}/approve")
+async def admin_approve_agent_application(
+    application_id: str, request: Request, payload: dict = Body(default={}),
+    requester: str = Depends(require_super_admin_dep),
+):
+    """Body: {"commission_percent": 3, "note": "optional"} - turns the player into an active agent."""
+    try:
+        res = await get_agent_service().review_application(
+            requester, application_id, True, (payload or {}).get("commission_percent"), (payload or {}).get("note", ""),
+        )
+    except AgentError as e:
+        raise _agent_error(e)
+    agent = res["agent"]
+    await _audit(request, requester, "agent.application_approve", target_type="agent_application", target_id=application_id,
+                 summary=f"Approved agent request from {res['application']['player_id']}",
+                 after={"commission_percent": (agent.commission_bps / 100) if agent else None})
+    return {"application": _application_json(res["application"]), "agent": agent.model_dump(mode="json") if agent else None}
+
+
+@router.post("/agent-applications/{application_id}/reject")
+async def admin_reject_agent_application(
+    application_id: str, request: Request, payload: dict = Body(default={}),
+    requester: str = Depends(require_super_admin_dep),
+):
+    try:
+        res = await get_agent_service().review_application(requester, application_id, False, None, (payload or {}).get("note", ""))
+    except AgentError as e:
+        raise _agent_error(e)
+    await _audit(request, requester, "agent.application_reject", target_type="agent_application", target_id=application_id,
+                 summary=f"Rejected agent request from {res['application']['player_id']}", after={"note": (payload or {}).get("note", "")})
+    return {"application": _application_json(res["application"])}
+
+
+@router.put("/agents/{agent_id}/commission")
+async def admin_set_agent_commission(
+    agent_id: str, request: Request, payload: dict = Body(...), requester: str = Depends(require_super_admin_dep),
+):
+    """Body: {"commission_percent": 5} - the agent's base rate (tiers can still raise what is paid)."""
+    service = get_agent_service()
+    try:
+        before = await service.get_agent(agent_id)
+        agent = await service.update_commission(requester, agent_id, payload.get("commission_percent"))
+    except AgentError as e:
+        raise _agent_error(e)
+    await _audit(request, requester, "agent.commission", target_type="agent", target_id=agent_id,
+                 summary=f"Commission {before.commission_bps / 100:g}% -> {agent.commission_bps / 100:g}%",
+                 before={"commission_percent": before.commission_bps / 100}, after={"commission_percent": agent.commission_bps / 100})
+    return {"agent": agent.model_dump(mode="json")}
+
+
+@router.put("/agents/{agent_id}/rewards")
+async def admin_set_agent_rewards(
+    agent_id: str, request: Request, payload: dict = Body(...), requester: str = Depends(require_super_admin_dep),
+):
+    """Body: {"enabled": false} - stop (or resume) new-player / retention rewards for this agent only."""
+    try:
+        agent = await get_agent_service().set_rewards_enabled(requester, agent_id, payload.get("enabled"))
+    except AgentError as e:
+        raise _agent_error(e)
+    await _audit(request, requester, "agent.rewards_toggle", target_type="agent", target_id=agent_id,
+                 summary=f"Rewards {'enabled' if agent.rewards_enabled else 'disabled'}", after={"rewards_enabled": agent.rewards_enabled})
+    return {"agent": agent.model_dump(mode="json")}
+
+
 @router.post("/agents")
-async def admin_create_agent(payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
+async def admin_create_agent(request: Request, payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
     """Body: {"telegram_id": "123456789", "commission_percent": 5}"""
     try:
         agent = await get_agent_service().create_agent(
@@ -1052,30 +1216,35 @@ async def admin_create_agent(payload: dict = Body(...), requester: str = Depends
         )
     except AgentError as e:
         raise _agent_error(e)
+    await _audit(request, requester, "agent.create", target_type="agent", target_id=str(getattr(agent, "id", "")),
+                 summary=f"Agent {payload.get('telegram_id')} at {payload.get('commission_percent', 0)}%")
     return {"agent": agent.model_dump(mode="json")}
 
 
 @router.post("/agents/{agent_id}/suspend")
-async def admin_suspend_agent(agent_id: str, requester: str = Depends(require_super_admin_dep)):
+async def admin_suspend_agent(agent_id: str, request: Request, requester: str = Depends(require_super_admin_dep)):
     try:
         agent = await get_agent_service().set_status(requester, agent_id, "suspended")
     except AgentError as e:
         raise _agent_error(e)
+    await _audit(request, requester, "agent.suspend", target_type="agent", target_id=agent_id, summary="Suspended agent")
     return {"agent": agent.model_dump(mode="json")}
 
 
 @router.post("/agents/{agent_id}/activate")
-async def admin_activate_agent(agent_id: str, requester: str = Depends(require_super_admin_dep)):
+async def admin_activate_agent(agent_id: str, request: Request, requester: str = Depends(require_super_admin_dep)):
     try:
         agent = await get_agent_service().set_status(requester, agent_id, "active")
     except AgentError as e:
         raise _agent_error(e)
+    await _audit(request, requester, "agent.activate", target_type="agent", target_id=agent_id, summary="Activated agent")
     return {"agent": agent.model_dump(mode="json")}
 
 
 @router.post("/agents/{agent_id}/float")
 async def admin_adjust_agent_float(
     agent_id: str,
+    request: Request,
     payload: dict = Body(...),
     requester: str = Depends(require_super_admin_dep),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -1090,6 +1259,8 @@ async def admin_adjust_agent_float(
             )
         except AgentError as e:
             raise _agent_error(e)
+        await _audit(request, requester, "agent.float", target_type="agent", target_id=agent_id,
+                     summary=f"{payload.get('amount')} ETB: {str(payload.get('note') or '')[:200]}", after={"amount": payload.get("amount")})
         return {"agent": agent.model_dump(mode="json")}
 
     return await run_idempotent(requester, f"agent_float:{agent_id}", idempotency_key, payload, _apply)

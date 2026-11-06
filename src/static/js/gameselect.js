@@ -5,16 +5,9 @@
 // lives alongside the Bingo lobby as shared account-level functionality.
 // The player-facing game selection contains Bingo only.
 //
-// The wallet/profile code below is ported directly from app.js (Bingo's
-// former all-in-one page) rather than rewritten from scratch - it's
-// tested, working, real-money-handling code, and this move is a relocate,
-// not a rebuild.
-
-const tg = window.Telegram?.WebApp;
-tg?.ready();
-tg?.expand();
-
-const API = "";
+// Shared plumbing (tg, API, api, toast, idemKey, initIdentity) lives in
+// melbete-core.js, which index.html loads first. The game room (app.js) no
+// longer carries any wallet code - this file is the only wallet implementation.
 
 const state = {
   playerId: null,
@@ -29,59 +22,11 @@ const state = {
 };
 
 // ---------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------
-function initIdentity() {
-  const user = tg?.initDataUnsafe?.user;
-  if (user) {
-    state.telegramId = String(user.id);
-    state.playerId = `tg_${user.id}`;
-    state.displayName = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || "Player";
-    return;
-  }
-  throw new Error("For your security, this must be opened from the official Telegram bot.");
-}
-
-// ---------------------------------------------------------------------
 // View + toast helpers
 // ---------------------------------------------------------------------
 function showView(id) {
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   document.getElementById(id)?.classList.add("active");
-}
-
-function toast(msg, kind = "info") {
-  const el = document.getElementById("toast");
-  el.textContent = msg;
-  el.className = `toast ${kind}`;
-  el.classList.remove("hidden");
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.add("hidden"), 3500);
-}
-
-// One Idempotency-Key per user action, reused on retry (see app.js for the full note).
-const _idemKeys = {};
-function idemKey(scope) {
-  if (!_idemKeys[scope]) _idemKeys[scope] = `${scope}-${crypto.randomUUID()}`;
-  return _idemKeys[scope];
-}
-function clearIdemKey(scope) { delete _idemKeys[scope]; }
-
-async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (tg?.initData) headers["X-Telegram-Init-Data"] = tg.initData;
-  const res = await fetch(`${API}${path}`, { ...options, headers });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.detail || `Request failed (${res.status})`);
-    err.status = res.status;
-    throw err;
-  }
-  return data;
-}
-
-function isIdentityError(e) {
-  return e && e.status === 403;
 }
 
 function openModal(id) { document.getElementById(id).classList.remove("hidden"); }
@@ -108,10 +53,29 @@ function setDepositDot(pending) {
   document.getElementById("hub-tab-deposit")?.classList.toggle("has-dot", !!pending);
 }
 
+// Withdrawable = winnings only (deposits and bonus are play-only). The server computes it; older servers
+// that do not send it fall back to won_balance capped by the real balance.
+function withdrawableOf(wallet) {
+  if (wallet && wallet.withdrawable_balance !== undefined) return Math.max(0, Number(wallet.withdrawable_balance) || 0);
+  return Math.max(0, Math.min(Number(wallet?.won_balance) || 0, Number(wallet?.balance) || 0));
+}
+
+function applyWithdrawable(wallet) {
+  state.wallet = wallet;
+  const amount = withdrawableOf(wallet);
+  const el = document.getElementById("hub-withdrawable");
+  if (el) {
+    el.textContent = amount.toLocaleString();
+    el.classList.toggle("off", amount <= 0);
+    document.getElementById("hub-tab-withdraw")?.setAttribute("aria-label", `Withdraw, ${amount} ETB withdrawable`);
+  }
+}
+
 async function refreshWallet() {
   try {
     const wallet = await api(`/api/wallet/${state.playerId}`);
     document.getElementById("balance-real").textContent = wallet.balance;
+    applyWithdrawable(wallet);
     updateFooterChip(wallet.balance);
     refreshDepositTimeline();   // not awaited; has its own error handling
   } catch (e) { /* non-fatal - header just won't update this tick */ }
@@ -368,6 +332,8 @@ async function openPromoModal(focus, keepOpen) {
     const data = await api(`/api/bonus/summary/${encodeURIComponent(state.playerId)}`);
     renderPromoList(data);
     setPromoBadges(claimableCount(data));
+    appendLeaderboardCard(list);   // not awaited: the other promotions are already on screen
+    appendMissionsCard(list);
   } catch (e) {
     if (list) list.innerHTML = '<p class="muted small">Promotions are unavailable right now. Please try again shortly.</p>';
   }
@@ -423,6 +389,9 @@ async function renderPromoBanner() {
 // Uses the same /api/lobby + select-cartela endpoints as the bingo room.
 // ---------------------------------------------------------------------
 let quickPickBusy = false;
+const MAX_CARTELAS = 4;               // a player holds 1-4 cartelas per round
+let quickSelected = new Set();         // cartela numbers ticked on the hub, not yet reserved
+let quickRoomId = null;
 
 function secondsLeft(room) {
   if (!room.countdown_started_at) return null;
@@ -430,71 +399,189 @@ function secondsLeft(room) {
   return Math.max(0, Math.round(left));
 }
 
-async function pickQuickCartela(room, n) {
-  if (quickPickBusy) return;
+/** Reserve every ticked cartela (1-4) through the normal select-cartela endpoint, one by one. */
+async function reserveQuickCartelas(room, numbers) {
+  if (quickPickBusy || !numbers.length) return;
   quickPickBusy = true;
   document.querySelectorAll("#cartela-quick-picker button").forEach((b) => { b.disabled = true; });
-  try {
-    await api(`/api/session/${room.id}/select-cartela`, {
-      method: "POST",
-      body: JSON.stringify({ player_id: state.playerId, cartela_number: n }),
-    });
-    window.location.href = GAME_ROUTES.bingo;
-  } catch (e) {
-    quickPickBusy = false;
-    toast(e.message, "error");
-    if (e.status === 402) { setHubTab("deposit"); openDepositModal(); }
-    renderCartelaPicker();
+  const failed = [];
+  let reason = null;
+  let balanceShort = false;
+  for (const n of numbers) {
+    try {
+      await api(`/api/session/${room.id}/select-cartela`, {
+        method: "POST",
+        body: JSON.stringify({ player_id: state.playerId, cartela_number: n }),
+      });
+    } catch (e) {
+      failed.push(n); reason = e.message;
+      if (e.status === 402) { balanceShort = true; break; }   // no point trying the rest
+      if (e.status === 409 || e.status === 400) continue;    // taken / over the limit: try the others
+    }
   }
+  quickPickBusy = false;
+  if (failed.length < numbers.length) {
+    // at least one is reserved - go to the room; tell the player about any that were not.
+    if (failed.length) toast(`Reserved ${numbers.length - failed.length}. ${reason || "Some cartelas could not be reserved."}`, "error");
+    window.location.href = GAME_ROUTES.bingo;
+    return;
+  }
+  toast(reason || "Could not reserve the cartela.", "error");
+  quickSelected = new Set();
+  if (balanceShort) { setHubTab("deposit"); openDepositModal(); }
+  renderCartelaPicker();
+}
+
+// The hub always shows EVERY cartela (cartela_min..cartela_max). Free ones are tappable while the lobby is
+// open; during a running round / the short results window they are shown read-only (taken ones marked) and
+// become tappable on their own as soon as the next round's lobby opens.
+let quickPickerTimer = null;
+let quickPickerOpen = null; // whether the last render had a tappable lobby
+
+function scheduleQuickPicker() {
+  clearTimeout(quickPickerTimer);
+  quickPickerTimer = setTimeout(renderCartelaPicker, quickPickerOpen ? 10000 : 3000);
+}
+
+// No active lobby: keep the picker on screen, greyed out, until the next round opens.
+function renderPickerWaiting(box) {
+  quickSelected = new Set(); quickRoomId = null; quickPickerOpen = false;
+  const head = document.createElement("div");
+  head.className = "qp-head";
+  head.innerHTML = '<div><h2>Pick your cartela</h2><p class="qp-sub">Waiting for the next round - cartelas open soon.</p></div>';
+  const grid = document.createElement("div");
+  grid.className = "qp-grid";
+  for (let n = 1; n <= 500; n++) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "qp-chip"; b.textContent = n; b.disabled = true;
+    b.setAttribute("aria-label", `Cartela ${n}, not open yet`);
+    grid.appendChild(b);
+  }
+  box.classList.add("waiting");
+  box.classList.remove("hidden");
+  box.replaceChildren(head, grid);
+  document.body.classList.add("has-quick-picker");
 }
 
 async function renderCartelaPicker() {
   const box = document.getElementById("cartela-quick-picker");
-  if (!box || quickPickBusy) return;
+  if (!box || quickPickBusy) { scheduleQuickPicker(); return; }
   try {
     const lobby = await api("/api/lobby");
     const room = Object.values(lobby)[0];
-    if (!room) { box.classList.add("hidden"); document.body.classList.remove("has-quick-picker"); return; }
-    box.classList.remove("hidden");
+    if (!room) { renderPickerWaiting(box); scheduleQuickPicker(); return; }
+    box.classList.remove("hidden", "waiting");
+    const open = room.state === "waiting";
+    quickPickerOpen = open;
+    if (room.id !== quickRoomId) { quickRoomId = room.id; quickSelected = new Set(); }
+
+    // Cartelas this player already holds in the open lobby count towards the 1-4 limit.
+    let mine = [];
+    if (open) {
+      try { mine = ((await api(`/api/session/${room.id}/my-cards?player_id=${state.playerId}`)).cards || []).map((c) => c.cartela_number); } catch (e) { /* optional */ }
+    }
+    const maxCards = Math.max(1, Math.min(room.cards_per_player || MAX_CARTELAS, MAX_CARTELAS));
+    const remaining = Math.max(0, maxCards - mine.length);
+    const min = room.cartela_min || 1, max = room.cartela_max || 500;
+    const taken = new Set(room.taken_cartelas || []);
+    quickSelected.forEach((n) => { if (taken.has(n) || n < min || n > max) quickSelected.delete(n); });
+    while (quickSelected.size > remaining) quickSelected.delete([...quickSelected].pop());
+
     const left = secondsLeft(room);
     const head = document.createElement("div");
     head.className = "qp-head";
     head.innerHTML = '<div><h2>Pick your cartela</h2><p class="qp-sub"></p></div>';
     const sub = head.querySelector(".qp-sub");
-    if (room.state !== "waiting") {
-      sub.textContent = "A round is in progress.";
-      const watch = document.createElement("button");
-      watch.type = "button"; watch.className = "qp-link"; watch.textContent = "Watch live";
-      watch.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
-      box.replaceChildren(head, watch);
-      document.body.classList.remove("has-quick-picker");
-      return;
-    }
-    sub.textContent = `Stake ${room.stake_amount} ETB` + (left !== null ? ` - starts in ${left}s` : " - round starts when a cartela is picked");
-    const taken = new Set(room.taken_cartelas || []);
+    if (open) {
+      sub.textContent = `Stake ${room.stake_amount} ETB per cartela - pick 1 to ${maxCards}` +
+        (mine.length ? ` (you hold ${mine.length})` : "") +
+        (left !== null ? ` - starts in ${left}s` : " - round starts when enough cartelas are picked");
+    } else if (room.state === "running") sub.textContent = "A round is in progress - the next one opens when it ends.";
+    else sub.textContent = "Round finished - the next round opens in a moment.";
+
     const free = [];
-    for (let n = room.cartela_min || 1; n <= (room.cartela_max || 500); n++) if (!taken.has(n)) free.push(n);
+    for (let n = min; n <= max; n++) if (!taken.has(n)) free.push(n);
     const random = document.createElement("button");
     random.type = "button"; random.className = "qp-random"; random.textContent = "Pick for me";
-    random.disabled = free.length === 0;
-    random.addEventListener("click", () => pickQuickCartela(room, free[Math.floor(Math.random() * free.length)]));
+    random.disabled = !open || remaining === 0 || free.length === 0;
+    random.addEventListener("click", () => {
+      const pool = free.filter((n) => !quickSelected.has(n));
+      if (!pool.length || quickSelected.size >= remaining) return;
+      quickSelected.add(pool[Math.floor(Math.random() * pool.length)]);
+      renderCartelaPicker();
+    });
     head.appendChild(random);
+
     const legend = document.createElement("p");
     legend.className = "qp-legend";
     legend.innerHTML = `<span><i class="qp-dot free"></i>Free ${free.length}</span><span><i class="qp-dot taken"></i>Taken ${taken.size}</span>`;
+    const pot = Number(room.estimated_prize ?? room.prize_pool ?? 0);
+    if (pot > 0 || open) {
+      const potEl = document.createElement("span");
+      potEl.className = "qp-pot";
+      potEl.append(open ? "Prize pool now " : "Prize pool ");
+      const potVal = document.createElement("b");
+      potVal.textContent = `${pot.toLocaleString()} ETB`;
+      potEl.appendChild(potVal);
+      legend.appendChild(potEl);
+    }
+
     const grid = document.createElement("div");
     grid.className = "qp-grid";
-    for (let n = room.cartela_min || 1; n <= (room.cartela_max || 500); n++) {
+    for (let n = min; n <= max; n++) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "qp-chip"; b.textContent = n;
       b.setAttribute("aria-label", `Cartela ${n}`);
-      if (taken.has(n)) { b.disabled = true; b.classList.add("taken"); b.setAttribute("aria-label", `Cartela ${n}, taken`); }
-      else b.addEventListener("click", () => pickQuickCartela(room, n));
+      if (mine.includes(n)) { b.disabled = true; b.classList.add("mine"); b.setAttribute("aria-label", `Cartela ${n}, yours`); }
+      else if (taken.has(n)) { b.disabled = true; b.classList.add("taken"); b.setAttribute("aria-label", `Cartela ${n}, taken`); }
+      else if (!open) b.disabled = true;
+      else {
+        const on = quickSelected.has(n);
+        b.classList.toggle("selected", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        if (!on && quickSelected.size >= remaining) b.disabled = true;   // limit reached: only ticked ones stay tappable
+        b.addEventListener("click", () => {
+          if (quickSelected.has(n)) quickSelected.delete(n);
+          else if (quickSelected.size < remaining) quickSelected.add(n);
+          renderCartelaPicker();
+        });
+      }
       grid.appendChild(b);
     }
-    box.replaceChildren(head, legend, grid);
+    const parts = [head, legend, grid];
+    if (room.state === "running") {
+      const watch = document.createElement("button");
+      watch.type = "button"; watch.className = "qp-link"; watch.textContent = "Watch live";
+      watch.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
+      parts.splice(1, 0, watch);
+    }
+    if (open) {
+      const bar = document.createElement("div");
+      bar.className = "qp-bar";
+      const count = quickSelected.size;
+      const text = document.createElement("span");
+      text.textContent = count
+        ? `${count} selected - ${count * room.stake_amount} ETB`
+        : (remaining === 0 ? `You already hold ${maxCards} cartelas` : `Tap up to ${remaining} cartela${remaining === 1 ? "" : "s"}`);
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "qp-random"; go.textContent = count ? `Reserve ${count}` : "Reserve";
+      go.disabled = count === 0;
+      go.addEventListener("click", () => reserveQuickCartelas(room, [...quickSelected].sort((x, y) => x - y)));
+      bar.append(text, go);
+      if (mine.length && count === 0) {
+        const view = document.createElement("button");
+        view.type = "button"; view.className = "qp-link"; view.textContent = "Open my cartelas";
+        view.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
+        bar.appendChild(view);
+      }
+      parts.push(bar);
+    }
+    const y = window.scrollY;
+    box.replaceChildren(...parts);
+    window.scrollTo(0, y);
     document.body.classList.add("has-quick-picker");
   } catch (e) { box.classList.add("hidden"); document.body.classList.remove("has-quick-picker"); /* optional - never block the hub */ }
+  scheduleQuickPicker();
 }
 
 async function loadPaymentMethods() {
@@ -834,9 +921,15 @@ async function openWithdrawModal() {
       api(`/api/wallet/${state.playerId}/limits`),
       api(`/api/wallet/${state.playerId}`),
     ]);
+    state.withdrawLimits = limits;
+    applyWithdrawable(wallet);
     document.getElementById("withdraw-limits").textContent =
-      mbT("wd_limits", { won: wallet.won_balance, min: limits.min_withdrawal, max: limits.max_withdrawal });
+      mbT("wd_limits", { min: limits.min_withdrawal, max: limits.max_withdrawal });
   } catch (e) { /* non-fatal */ }
+  const wd = withdrawableOf(state.wallet);
+  document.getElementById("withdraw-balance-value").textContent = wd.toLocaleString();
+  document.querySelector(".withdraw-balance-box")?.classList.toggle("is-empty", wd <= 0);
+  document.getElementById("withdraw-deposit-btn")?.classList.toggle("hidden", wd > 0);
   openModal("withdraw-modal");
 }
 
@@ -871,6 +964,12 @@ async function submitWithdrawal() {
   const legalName = document.getElementById("withdraw-legal-name").value.trim();
   if (!state.selectedWithdrawMethod) return toast(mbT("tt_need_wd_method"), "error");
   if (!amount) return toast(mbT("tt_need_wd_amount"), "error");
+  const wd = withdrawableOf(state.wallet), lim = state.withdrawLimits;
+  if (wd <= 0) return toast(mbT("tt_wd_none"), "error");
+  if (amount > wd) return toast(mbT("tt_wd_over", { n: wd }), "error");
+  if (lim && (amount < lim.min_withdrawal || amount > lim.max_withdrawal)) {
+    return toast(mbT("tt_wd_range", { min: lim.min_withdrawal, max: lim.max_withdrawal }), "error");
+  }
   if (!legalName) return toast(mbT("tt_need_legal"), "error");
   try {
     const res = await api(`/api/wallet/${state.playerId}/withdraw`, {
@@ -894,7 +993,29 @@ async function submitWithdrawal() {
 // ---------------------------------------------------------------------
 // History modal
 // ---------------------------------------------------------------------
+async function renderWalletBreakdown() {
+  const box = document.getElementById("wallet-breakdown");
+  if (!box) return;
+  let wallet = state.wallet;
+  try { wallet = await api(`/api/wallet/${state.playerId}`); applyWithdrawable(wallet); } catch (e) { /* show the last known values */ }
+  if (!wallet) { box.replaceChildren(); return; }
+  const tile = (labelKey, value, cls) => {
+    const d = document.createElement("div");
+    d.className = `wb-tile ${cls || ""}`.trim();
+    const l = document.createElement("span"); l.textContent = mbT(labelKey);
+    const v = document.createElement("strong"); v.textContent = `${Number(value || 0).toLocaleString()} ETB`;
+    d.append(l, v);
+    return d;
+  };
+  box.replaceChildren(
+    tile("hist_playable", wallet.balance),
+    tile("hist_withdrawable", withdrawableOf(wallet), "wb-withdrawable"),
+    tile("hist_bonus", wallet.bonus_balance),
+  );
+}
+
 async function openHistoryModal() {
+  renderWalletBreakdown();   // not awaited - the list below should not wait for it
   const res = await api(`/api/wallet/${state.playerId}/transactions`);
   const list = document.getElementById("history-list");
   list.innerHTML = "";
@@ -1013,12 +1134,65 @@ async function populateProfileDrawer() {
 
   addSection("Wallet", [
     ["Total Balance", `${profile.balance} ETB`, "highlight"],
-    ["Withdrawable", `${profile.won_balance} ETB`, "success"],
+    ["Withdrawable", `${withdrawableOf(profile)} ETB`, "success"],
     ["Bonus Credit", `${profile.bonus_balance} ETB`],
     ["Lifetime In", `${profile.lifetime_deposited} ETB`],
   ]);
 
   fields.appendChild(frag);
+  const agentBox = document.createElement("div");
+  agentBox.className = "profile-agent";
+  fields.appendChild(agentBox);
+  renderAgentSection(agentBox);
+}
+
+// Agents: an existing agent gets a link to the portal; everyone else can ask to become one.
+async function renderAgentSection(box) {
+  const q = `player_id=${encodeURIComponent(state.playerId)}`;
+  let me;
+  try { me = await api(`/api/agent/me?${q}`); } catch (e) { return; }   // portal switched off / not reachable: show nothing
+  const title = document.createElement("h4");
+  title.textContent = "Agent";
+  const text = document.createElement("p");
+  text.className = "muted small";
+  box.replaceChildren(title, text);
+  if (me.is_agent) {
+    text.textContent = `You are an agent (${me.commission_percent}% commission).`;
+    const open = document.createElement("button");
+    open.type = "button"; open.className = "primary-btn"; open.textContent = "Open agent portal";
+    open.addEventListener("click", () => { window.location.href = "/agent"; });
+    box.appendChild(open);
+    return;
+  }
+  let application = null;
+  try { application = (await api(`/api/agent/application?${q}`)).application; } catch (e) { /* treat as none */ }
+  if (application && application.status === "pending") {
+    text.textContent = "Your agent request is waiting for review.";
+    return;
+  }
+  if (application && application.status === "rejected") {
+    text.textContent = `Your last request was not approved.${application.review_note ? " " + application.review_note : ""} You can apply again.`;
+  } else {
+    text.textContent = "Top up players and earn commission. Send a request and an admin will review it.";
+  }
+  const note = document.createElement("input");
+  note.type = "text"; note.maxLength = 300; note.placeholder = "Anything we should know? (optional)";
+  note.className = "agent-note";
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "secondary-btn"; btn.textContent = "Become an agent";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await api(`/api/agent/apply?${q}`, { method: "POST", body: JSON.stringify({ note: note.value.trim() }) });
+      toast("Request sent. An admin will review it soon.", "success");
+      note.remove(); btn.remove();
+      text.textContent = "Your agent request is waiting for review.";
+    } catch (e) {
+      btn.disabled = false;
+      toast(e.message, "error");
+    }
+  });
+  box.append(note, btn);
 }
 
 // ---------------------------------------------------------------------
@@ -1283,13 +1457,15 @@ function wireEvents() {
     setHubTab("profile");
     openProfileDrawer();
   });
-  document.getElementById("quick-deposit-btn")?.addEventListener("click", () => {
+  document.getElementById("withdraw-deposit-btn")?.addEventListener("click", () => {
+    closeModal("withdraw-modal");
     setHubTab("deposit");
     openDepositModal();
   });
-  document.getElementById("quick-withdraw-btn")?.addEventListener("click", () => {
-    setHubTab("withdraw");
-    openWithdrawModal();
+  document.getElementById("withdraw-max-btn")?.addEventListener("click", () => {
+    const lim = state.withdrawLimits;
+    const max = Math.min(withdrawableOf(state.wallet), lim ? lim.max_withdrawal : Infinity);
+    document.getElementById("withdraw-amount").value = max > 0 ? max : "";
   });
   document.getElementById("deposit-submit-btn")?.addEventListener("click", submitDeposit);
   document.getElementById("save-address-btn")?.addEventListener("click", saveWithdrawAddress);
@@ -1343,7 +1519,7 @@ function setHubTab(tab) {
 // ---------------------------------------------------------------------
 async function main() {
   try {
-    initIdentity();
+    initIdentity(state);
     wireEvents();
     document.getElementById("top-bar").classList.remove("hidden");
     document.getElementById("hub-tabbar")?.classList.remove("hidden");
@@ -1360,7 +1536,6 @@ async function main() {
     openFromHash();
     renderPromoBanner();
     renderCartelaPicker();
-    setInterval(renderCartelaPicker, 10000);
     setInterval(refreshWallet, 8000);
     refreshPromoBadge();
     setInterval(refreshPromoBadge, 60000);
@@ -1398,3 +1573,299 @@ document.addEventListener("melbete:lang", () => {
 });
 
 main();
+
+
+// ---------------------------------------------------------------------
+// Leaderboard campaign card (inside Promotions): countdown, my points, channel reward, rewards + wagering.
+// The server decides everything; this only displays it.
+// ---------------------------------------------------------------------
+let lbTicker = null;
+
+function lbEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function lbCountdown(ms) {
+  if (ms <= 0) return "0s";
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  const pad = (n) => String(n).padStart(2, "0");
+  return d > 0 ? `${d}d ${pad(h)}h ${pad(m)}m ${pad(s % 60)}s` : `${pad(h)}:${pad(m)}:${pad(s % 60)}`;
+}
+
+function me_in_band(data, t) {
+  const rank = data.me && data.me.rank;
+  return !!rank && rank >= t.from && rank <= t.to;
+}
+
+function lbWageringTracker(w, fmt) {
+  // Starts full (100% still to wager) the moment the reward is distributed and drains as the player wagers.
+  const left = Math.max(0, Math.min(100, 100 - w.percent));
+  const box = lbEl("div", "lb-reward lb-wager");
+  box.appendChild(lbEl("strong", "", `Wagering tracker · ${w.multiplier}×`));
+  const bar = lbEl("div", "lb-bar"); const fill = lbEl("i"); fill.style.width = `${left}%`; bar.appendChild(fill);
+  box.appendChild(bar);
+  const stats = lbEl("div", "lb-stats lb-stats-3");
+  [["Required", fmt(w.required)], ["Completed", fmt(w.completed)], ["Remaining", fmt(w.remaining)]].forEach(([k, v]) => {
+    const t = lbEl("div", "lb-stat"); t.append(lbEl("span", "", k), lbEl("strong", "", v)); stats.appendChild(t);
+  });
+  box.appendChild(stats);
+  const pct = `${left.toFixed(2).replace(/\.?0+$/, "")}% left to wager · ${w.percent}% completed. `;
+  const status = w.status === "eligible"
+    ? "Wagering complete ✓ - winnings from bonus play are withdrawable."
+    : "Withdrawal locked: only cartela stakes after the reward was credited count toward this.";
+  box.appendChild(lbEl("span", "muted small", pct + status));
+  return box;
+}
+
+async function appendLeaderboardCard(list) {
+  if (!list) return;
+  let data;
+  try { data = await api(`/api/leaderboard/${encodeURIComponent(state.playerId)}`); } catch (e) { return; }
+  list.querySelector(".lb-card")?.remove();
+  if (lbTicker) { clearInterval(lbTicker); lbTicker = null; }
+  const c = data.campaign;
+  if (!c && !(data.rewards || []).length) return;
+
+  const card = lbEl("div", "promo-card lb-card");
+  card.dataset.promo = "leaderboard";
+  const body = lbEl("div", "lb-body");
+  card.appendChild(body);
+
+  if (c) {
+    const skew = Date.parse(data.now) - Date.now();
+    const starts = Date.parse(c.starts_at), ends = Date.parse(c.ends_at);
+    body.appendChild(lbEl("strong", "lb-title", `🏆 ${c.name}`));
+    const clock = lbEl("div", "lb-clock");
+    body.appendChild(clock);
+    const paint = () => {
+      const now = Date.now() + skew;
+      if (c.phase === "distributed") clock.textContent = "Finished · rewards paid";
+      else if (c.phase === "rejected") clock.textContent = "Finished · no rewards this time";
+      else if (now < starts) clock.textContent = `Starts in ${lbCountdown(starts - now)}`;
+      else if (now < ends) clock.textContent = `Ends in ${lbCountdown(ends - now)}`;
+      else clock.textContent = "Ended · rewards are waiting for approval";
+      if (!card.isConnected && lbTicker) { clearInterval(lbTicker); lbTicker = null; }
+    };
+    paint();
+    if (c.phase === "scheduled" || c.phase === "active") lbTicker = setInterval(paint, 1000);
+
+    const fmt = (n) => Number(n || 0).toLocaleString();
+    const tiers = c.reward_tiers || [];
+    body.appendChild(lbEl("p", "muted small",
+      `Every confirmed cartela reservation earns ${c.points_per_cartela} points. Top ${c.winners_count} players share ${fmt(c.budget_etb)} ETB` +
+      `${tiers.length ? `: ${fmt(tiers[0].amount)} ETB for 1st place` : ""}. Ties go to whoever reserved more ETB. ` +
+      `Rewards are play-only bonus credit; after ${c.wagering_multiplier}× wagering, winnings from bonus play become withdrawable.`));
+
+    if (c.phase !== "scheduled") {
+      const me = data.me || {};
+      const stats = lbEl("div", "lb-stats");
+      [["Rank", me.rank ? `#${me.rank}` : "-"], ["Points", me.points ?? 0], ["Cartelas", me.cartelas ?? 0],
+       ["Est. reward", me.estimated_reward ? `${fmt(me.estimated_reward)} ETB` : "-"]].forEach(([k, v]) => {
+        const t = lbEl("div", "lb-stat"); t.append(lbEl("span", "", k), lbEl("strong", "", String(v))); stats.appendChild(t);
+      });
+      body.appendChild(stats);
+      if (me.rank) body.appendChild(lbEl("p", me.winning_zone ? "lb-zone in" : "lb-zone", me.winning_zone ? "You are inside the winning places." : `Keep going - the top ${c.winners_count} win.`));
+      const nt = me.next_target;
+      if (nt) {
+        const prize = nt.amount ? ` (${fmt(nt.amount)} ETB)` : "";
+        body.appendChild(lbEl("p", "lb-zone", nt.tie
+          ? `Next target: #${nt.rank}${prize} - you are level on points, reserve more ETB to pass.`
+          : `Next target: #${nt.rank}${prize} - ${fmt(nt.points_needed)} more points (about ${fmt(nt.cartelas_needed)} cartela${nt.cartelas_needed === 1 ? "" : "s"}).`));
+      }
+    }
+
+    if (tiers.length && c.phase !== "scheduled") {
+      const det = document.createElement("details");
+      det.className = "lb-top";
+      det.appendChild(lbEl("summary", "", "Reward ladder"));
+      tiers.forEach((t) => {
+        const r = lbEl("div", me_in_band(data, t) ? "lb-row me" : "lb-row");
+        r.append(lbEl("span", "lb-name", t.from === t.to ? `#${t.from}` : `#${t.from} – #${t.to}`), lbEl("strong", "", `${fmt(t.amount)} ETB`));
+        det.appendChild(r);
+      });
+      body.appendChild(det);
+    }
+
+    if (c.channel.enabled && c.phase === "active") {
+      const row = lbEl("div", "lb-channel");
+      if (c.channel.claimed) {
+        row.appendChild(lbEl("span", "lb-done", `Channel reward claimed ✓ (+${c.channel.points} points)`));
+      } else {
+        row.appendChild(lbEl("span", "", `Join @${c.channel.username} for +${c.channel.points} points`));
+        const join = lbEl("button", "secondary-btn", "Join channel");
+        join.type = "button";
+        join.addEventListener("click", () => {
+          const url = `https://t.me/${c.channel.username}`;
+          if (tg?.openTelegramLink) tg.openTelegramLink(url); else window.open(url, "_blank", "noopener");
+        });
+        const verify = lbEl("button", "primary-btn", "I joined - verify");
+        verify.type = "button";
+        verify.addEventListener("click", async () => {
+          verify.disabled = true;
+          try {
+            const r = await api(`/api/leaderboard/${encodeURIComponent(state.playerId)}/channel-claim`, { method: "POST", body: "{}" });
+            toast(`+${r.points} leaderboard points`, "success");
+            appendLeaderboardCard(list);
+          } catch (e) { toast(e.message, "error"); verify.disabled = false; }
+        });
+        row.append(join, verify);
+      }
+      body.appendChild(row);
+    }
+
+    if ((data.top || []).length) {
+      const det = document.createElement("details");
+      det.className = "lb-top";
+      det.appendChild(lbEl("summary", "", "Top players"));
+      data.top.forEach((t) => {
+        const r = lbEl("div", t.is_me ? "lb-row me" : "lb-row");
+        r.append(lbEl("span", "", `#${t.rank}`), lbEl("span", "lb-name", t.is_me ? `${t.name} (you)` : t.name), lbEl("strong", "", String(t.points)));
+        det.appendChild(r);
+      });
+      body.appendChild(det);
+    }
+    if ((data.history || []).length) {
+      const det = document.createElement("details");
+      det.className = "lb-top";
+      det.appendChild(lbEl("summary", "", "My points history"));
+      data.history.forEach((h) => {
+        const r = lbEl("div", "lb-row");
+        const label = h.source === "channel" ? "Channel reward" : `${h.entries} cartela${h.entries === 1 ? "" : "s"}`;
+        r.append(lbEl("span", "lb-name", `${label}${h.revoked ? " (revoked)" : ""}`), lbEl("strong", "", `+${h.points}`), lbEl("span", "muted small", new Date(h.at).toLocaleDateString()));
+        det.appendChild(r);
+      });
+      body.appendChild(det);
+    }
+  }
+
+  const fmtN = (n) => Number(n || 0).toLocaleString();
+  if (data.wagering && !data.wagering.projected && (data.rewards || []).length) body.appendChild(lbWageringTracker(data.wagering, fmtN));
+  (data.rewards || []).forEach((r) => {
+    const box = lbEl("div", "lb-reward");
+    box.appendChild(lbEl("strong", "", `Reward: ${fmtN(r.amount)} ETB · rank #${r.rank}`));
+    box.appendChild(lbEl("span", "muted small", r.status === "released"
+      ? `Wagering complete: ${fmtN(r.released)} ETB of bonus winnings is now withdrawable.`
+      : "Play-only bonus credit - use it on Bingo cartelas."));
+    body.appendChild(box);
+  });
+
+  list.prepend(card);
+}
+
+
+// ---------------------------------------------------------------------
+// Hub strips: "return to your round" and the leaderboard campaign.
+// ---------------------------------------------------------------------
+let rejoinTimer = null;
+
+async function refreshRejoinBanner() {
+  clearTimeout(rejoinTimer);
+  const el = document.getElementById("rejoin-banner");
+  if (!el || !state.playerId) return;
+  try {
+    if (!document.hidden) {
+      const { round } = await api(`/api/my-round/${encodeURIComponent(state.playerId)}`);
+      if (round) {
+        el.replaceChildren();
+        const dot = document.createElement("i"); dot.className = "rj-dot"; dot.setAttribute("aria-hidden", "true");
+        const text = document.createElement("span"); text.className = "rj-text";
+        text.textContent = `Round in progress · you hold ${round.cartelas} cartela${round.cartelas === 1 ? "" : "s"} · ${round.called} numbers called`;
+        const go = document.createElement("strong"); go.textContent = "Return ›";
+        el.append(dot, text, go);
+        el.classList.remove("hidden");
+      } else {
+        el.classList.add("hidden");
+      }
+    }
+  } catch (e) { /* keep whatever is on screen */ }
+  rejoinTimer = setTimeout(refreshRejoinBanner, 8000);
+}
+
+let lbStripTimer = null;
+let lbStripData = null;
+
+function paintLeaderboardStrip() {
+  const el = document.getElementById("lb-strip");
+  if (!el) return;
+  const c = lbStripData && lbStripData.campaign;
+  if (!c || c.phase === "cancelled" || c.phase === "rejected") { el.classList.add("hidden"); return; }
+  const now = Date.now() + (Date.parse(lbStripData.now) - lbStripFetchedAt);
+  const starts = Date.parse(c.starts_at), ends = Date.parse(c.ends_at);
+  const short = (t) => t.replace(/ \d\ds$/, "").replace(/:\d\d$/, "");   // drop the seconds: a strip does not need them
+  const when = c.phase === "distributed" ? "Finished" : now < starts ? `Starts in ${short(lbCountdown(starts - now))}`
+    : now < ends ? `Ends in ${short(lbCountdown(ends - now))}` : "Ended";
+  const me = lbStripData.me || {};
+  const rank = c.phase !== "scheduled" && me.rank ? ` · You're #${me.rank}` : "";
+  el.replaceChildren();
+  const icon = document.createElement("span"); icon.textContent = "🏆"; icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span"); text.className = "lbs-text"; text.textContent = `${c.name} · ${when}${rank}`;
+  const go = document.createElement("strong"); go.textContent = "›";
+  el.append(icon, text, go);
+  el.classList.remove("hidden");
+}
+
+let lbStripFetchedAt = Date.now();
+async function refreshLeaderboardStrip() {
+  clearTimeout(lbStripTimer);
+  if (!state.playerId) { lbStripTimer = setTimeout(refreshLeaderboardStrip, 3000); return; }
+  try {
+    if (!document.hidden) {
+      lbStripData = await api(`/api/leaderboard/${encodeURIComponent(state.playerId)}`);
+      lbStripFetchedAt = Date.now();
+    }
+  } catch (e) { /* keep the last values */ }
+  paintLeaderboardStrip();
+  lbStripTimer = setTimeout(refreshLeaderboardStrip, 60000);
+}
+
+document.getElementById("rejoin-banner")?.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
+document.getElementById("lb-strip")?.addEventListener("click", () => openPromoModal("leaderboard"));
+setTimeout(() => { refreshRejoinBanner(); refreshLeaderboardStrip(); setInterval(paintLeaderboardStrip, 15000); }, 1500);
+
+
+// ---------------------------------------------------------------------
+// Daily missions (Promotions): play N rounds today, claim bonus credit.
+// ---------------------------------------------------------------------
+async function appendMissionsCard(list) {
+  if (!list) return;
+  let data;
+  try { data = await api(`/api/missions/${encodeURIComponent(state.playerId)}`); } catch (e) { return; }
+  list.querySelector(".mission-card")?.remove();
+  if (!data.enabled || !(data.missions || []).length) return;
+  const card = lbEl("div", "promo-card mission-card");
+  card.dataset.promo = "missions";
+  const body = lbEl("div", "lb-body");
+  body.appendChild(lbEl("strong", "lb-title", "🎯 Daily missions"));
+  body.appendChild(lbEl("p", "muted small", `Rounds you played today: ${data.rounds_today}. Rewards are bonus credit for playing; resets at midnight (Ethiopia time).`));
+  data.missions.forEach((m) => {
+    const row = lbEl("div", "mission-row");
+    const info = lbEl("div", "mission-info");
+    info.appendChild(lbEl("span", "", `Play ${m.rounds} round${m.rounds === 1 ? "" : "s"} · +${m.reward} ETB`));
+    const bar = lbEl("div", "lb-bar"); const fill = lbEl("i"); fill.style.width = `${Math.round((m.progress / m.rounds) * 100)}%`; bar.appendChild(fill);
+    info.appendChild(bar);
+    info.appendChild(lbEl("span", "muted small", `${m.progress}/${m.rounds}`));
+    row.appendChild(info);
+    if (m.claimed) {
+      row.appendChild(lbEl("span", "lb-done", "Claimed ✓"));
+    } else {
+      const btn = lbEl("button", m.claimable ? "primary-btn" : "secondary-btn", m.claimable ? "Claim" : "Locked");
+      btn.type = "button"; btn.disabled = !m.claimable;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          const r = await api(`/api/missions/${encodeURIComponent(state.playerId)}/claim`, { method: "POST", body: JSON.stringify({ rounds: m.rounds }) });
+          toast(`+${r.amount} ETB bonus credited`, "success");
+          await refreshWallet();
+          appendMissionsCard(list);
+        } catch (e) { toast(e.message, "error"); btn.disabled = false; }
+      });
+      row.appendChild(btn);
+    }
+    body.appendChild(row);
+  });
+  card.appendChild(body);
+  list.appendChild(card);
+}

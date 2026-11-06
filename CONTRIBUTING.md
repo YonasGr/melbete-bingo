@@ -64,7 +64,7 @@ Be respectful, inclusive, and professional in all interactions.
 
 ## Development Setup
 
-See MELBETE_BINGO_GUIDE.md for detailed setup instructions.
+See the README and docs/deployment.md for setup instructions.
 
 Quick start:
 ```bash
@@ -114,8 +114,8 @@ pytest --cov=src
 
 - Update relevant documentation for changes
 - Add docstrings to new functions/classes
-- Update API_REFERENCE.md for API changes
-- Update MELBETE_BINGO_GUIDE.md for user-facing changes
+- API changes are documented by the FastAPI route definitions (served at `/docs`); describe new endpoints in docstrings
+- Update docs/operations.md or docs/deployment.md for admin or deployment changes
 
 ## Commit Messages
 

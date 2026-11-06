@@ -72,7 +72,6 @@ ethio-bingo-ba74c-firebase-adminsdk-fbsvc-59c69aaa10.json
 
 *.patch
 *.sql
-!supabase/schema.sql
 !supabase/migrations/*.sql
 cloudflared/
 .env.*

@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 HOLDER = uuid.uuid4().hex          # identifies this process
 _shutting_down = False
-_shutdown_holder = None
 _table_ready = False
 
 _DDL = """CREATE TABLE IF NOT EXISTS loop_locks (
@@ -39,19 +38,16 @@ def _disabled() -> bool:
 async def try_acquire(name: str, ttl_seconds: float) -> bool:
     """Acquire or renew the lease `name` for `ttl_seconds`. True only if this process now holds it."""
     global _table_ready
-    holder = HOLDER
     if _disabled():
         return True
-    if _shutting_down and holder == _shutdown_holder:
+    if _shutting_down:
         return False
     try:
         pool = await get_pool()
-        # The pool can be rebound to a fresh test schema or database after
-        # module import, so the idempotent DDL must run for each connection
-        # context rather than relying on one process-global flag.
-        await pool.execute(_DDL)
-        _table_ready = True
-        return await pool.fetchval(_ACQUIRE, name, holder, float(ttl_seconds)) == holder
+        if not _table_ready:
+            await pool.execute(_DDL)
+            _table_ready = True
+        return await pool.fetchval(_ACQUIRE, name, HOLDER, float(ttl_seconds)) == HOLDER
     except Exception:  # noqa: BLE001
         logger.exception("Could not confirm loop lock %r - treating it as not held", name)
         return False
@@ -71,9 +67,8 @@ async def release(name: str) -> None:
 async def shutdown() -> None:
     """Called on graceful shutdown: stop acquiring (so our still-running loops cannot re-take a lease
     after we hand it over) and release every lease we hold so the new instance continues at once."""
-    global _shutting_down, _shutdown_holder
+    global _shutting_down
     _shutting_down = True
-    _shutdown_holder = HOLDER
     if _disabled():
         return
     try:

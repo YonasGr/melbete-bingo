@@ -206,8 +206,8 @@ async def test_get_or_create_waiting_session(service):
     assert len(room.draw_pool) == 75
     assert room.cartela_min == 1
     assert room.cartela_max == 500
-    # Minimum cartelas to start is configured in SystemSettings (default 3)
-    assert room.min_cartelas_to_start == 3
+    # Minimum cartelas to start is configured in SystemSettings (default 2)
+    assert room.min_cartelas_to_start == 2
 
     # Calling again while still waiting returns the SAME room - only one
     # global session may exist at a time.
@@ -407,7 +407,7 @@ async def test_charge_and_start_cancels_if_nobody_can_pay(service, wallet_servic
     assert started_room is None
     assert dropped == ["player-1"]
     room = await service.get_room(room.id)
-    assert room.state == "cancelled"
+    assert room.state == "waiting"
     assert room.taken_cartelas == []
 
 
@@ -556,11 +556,9 @@ async def test_both_cartelas_get_charged_at_round_start(service, wallet_service)
 
 @pytest.mark.asyncio
 async def test_second_winning_claim_does_not_win_the_lock(service, wallet_service):
-    # Override for testing
+    """Two players complete a pattern on the same number: the first claim settles BOTH (equal split) and the
+    second claim is told the win is already confirmed - nobody is ever paid twice."""
     await service.settings_repo.update({"min_cartelas_to_start": 1})
-    """Two players both complete a winning pattern in the same round -
-    only the FIRST claim_win call may win the settlement race; the second
-    must be told the round already ended, and only ever one payout happens."""
     room = await service.get_or_create_waiting_session()
     room, card1 = await service.select_cartela(room.id, "player-1", 1)
     room, card2 = await service.select_cartela(room.id, "player-2", 2)
@@ -576,24 +574,17 @@ async def test_second_winning_claim_does_not_win_the_lock(service, wallet_servic
     assert outcome1.is_valid is True
     assert outcome1.won is True
 
-    # player-2's card is also a valid winning pattern (every number was
-    # drawn) but the round has already ended - they must lose the race.
     outcome2 = await service.claim_win(room.id, "player-2", card2.id)
     assert outcome2.is_valid is True
     assert outcome2.won is False
-    assert "already ended" in outcome2.message.lower()
+    assert "already confirmed" in outcome2.message.lower()
 
     updated_room = await service.get_room(room.id)
     assert updated_room.state == "ended"
     assert updated_room.end_reason == "winner"
-    assert len(updated_room.winners) == 1  # only ever one winner recorded
-
-    wallet2 = await wallet_service.get_or_create_wallet("player-2")
-    assert wallet2.balance == 1000 - room.stake_amount  # never paid out
-
-    next_room = await service.advance_round(room.id)
-    assert next_room.state == "waiting"
-    assert next_room.id != room.id
+    assert sorted(w["player_id"] for w in updated_room.winners) == ["player-1", "player-2"]
+    ratio = await service.get_payout_ratio()
+    assert {w["payout"] for w in updated_room.winners} == {round(room.prize_pool * ratio) // 2}
 
 
 @pytest.mark.asyncio
@@ -767,7 +758,7 @@ async def test_countdown_started_at_clears_on_cancel(service, wallet_service):
     await service.charge_and_start(room.id)  # nobody can pay -> cancel_round
 
     room = await service.get_room(room.id)
-    assert room.state == "cancelled"
+    assert room.state == "waiting"
     assert room.countdown_started_at is None
 
 
@@ -962,11 +953,22 @@ async def _start_round_with_players(service, n_players):
 
 
 @pytest.mark.asyncio
-async def test_exactly_ten_players_keeps_single_winner_behavior(service):
-    room, cards = await _start_round_with_players(service, 10)
-    outcome = await service.claim_win(room.id, "player-1", cards[0].id)
-    assert outcome.won is True and outcome.pending is False
-    assert (await service.get_room(room.id)).state == "ended"
+async def test_ten_players_or_fewer_also_split_when_two_complete_on_the_same_number(service, wallet_service):
+    """Small rounds follow the same rule as big ones: simultaneous winners share the prize equally."""
+    room, cards = await _start_round(service, 10, winnable=[0, 1])
+    ended = await _draw_until_settled(service, room.id)
+    assert sorted(w["player_id"] for w in ended.winners) == ["player-1", "player-2"]
+    ratio = await service.get_payout_ratio()
+    assert {w["payout"] for w in ended.winners} == {round(room.prize_pool * ratio) // 2}
+
+
+@pytest.mark.asyncio
+async def test_small_round_single_winner_gets_everything(service, wallet_service):
+    room, cards = await _start_round(service, 3, winnable=[0])
+    ended = await _draw_until_settled(service, room.id)
+    ratio = await service.get_payout_ratio()
+    assert [w["player_id"] for w in ended.winners] == ["player-1"]
+    assert ended.winners[0]["payout"] == round(room.prize_pool * ratio)
 
 
 def _unwinnable(grid):
@@ -1161,3 +1163,37 @@ async def test_player_can_hold_up_to_four_cartelas(service):
         room, _ = await service.select_cartela(room.id, "player-1", n)
     with pytest.raises(TooManyCartelasError):
         await service.select_cartela(room.id, "player-1", 5)
+
+
+@pytest.mark.asyncio
+async def test_cartela_limit_is_capped_at_four_even_if_room_allows_more(service):
+    """Admin/DB values above 4 must never let a player hold more than 4 cartelas."""
+    room = await service.get_or_create_waiting_session()
+    await service.rooms.update(room.id, {"cards_per_player": 10})
+    for n in (1, 2, 3, 4):
+        room, _ = await service.select_cartela(room.id, "player-1", n)
+    with pytest.raises(TooManyCartelasError):
+        await service.select_cartela(room.id, "player-1", 5)
+
+
+@pytest.mark.asyncio
+async def test_claim_with_someone_elses_card_or_another_rounds_card_is_rejected(service, wallet_service):
+    """A win can only be claimed with a card the claimer holds in THIS round (no stealing the pool)."""
+    await service.settings_repo.update({"min_cartelas_to_start": 2})
+    room = await service.get_or_create_waiting_session()
+    room, card1 = await service.select_cartela(room.id, "player-1", 1)
+    room, card2 = await service.select_cartela(room.id, "player-2", 2)
+    room, _ = await service.charge_and_start(room.id)
+    while True:
+        number, _ = await service.draw_number(room.id)
+        if number is None:
+            break
+    # every number is called, so every card is complete - but player-3 holds no card here,
+    # and player-2 must not be able to claim with player-1's card.
+    outcome = await service.claim_win(room.id, "player-3", card1.id)
+    assert outcome.is_valid is False and outcome.won is False
+    outcome = await service.claim_win(room.id, "player-2", card1.id)
+    assert outcome.is_valid is False and outcome.won is False
+    assert (await service.get_room(room.id)).state == "running"
+    ok = await service.claim_win(room.id, "player-1", card1.id)
+    assert ok.won is True

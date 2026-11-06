@@ -36,6 +36,14 @@ TEMPLATES: dict[str, tuple[str, Callable[[dict], str], Callable[[dict], str]]] =
         "❌", lambda d: "Deposit rejected",
         lambda d: f"Your deposit of {_etb(d.get('amount'))} could not be approved." + (f" Reason: {d['note']}" if d.get("note") else ""),
     ),
+    "deposit_received": (
+        "📥", lambda d: "Deposit received",
+        lambda d: f"We received your deposit request of {_etb(d.get('amount'))}. An admin will review it shortly and you will get a message when it is approved.",
+    ),
+    "withdrawal_received": (
+        "⏳", lambda d: "Withdrawal requested",
+        lambda d: f"Your withdrawal of {_etb(d.get('amount'))} is waiting for review. The amount is held until it is paid or refunded to you.",
+    ),
     "withdrawal_approved": (
         "💸", lambda d: "Withdrawal paid",
         lambda d: f"Your withdrawal of {_etb(d.get('amount'))} has been approved and sent.",
@@ -49,6 +57,7 @@ TEMPLATES: dict[str, tuple[str, Callable[[dict], str], Callable[[dict], str]]] =
         lambda d: "You won!" if int(d.get("shared_with") or 1) <= 1 else "You won - shared prize!",
         lambda d: (f"Cartela #{d['cartela_number']}: " if d.get("cartela_number") else "")
         + f"{_etb(d.get('payout'))} was added to your balance."
+        + (f" Your balance is now {_etb(d.get('balance'))}." if d.get("balance") is not None else "")
         + (f" Prize shared with {int(d['shared_with']) - 1} other winner(s)." if int(d.get("shared_with") or 1) > 1 else ""),
     ),
     "bonus_granted": (
@@ -67,6 +76,18 @@ TEMPLATES: dict[str, tuple[str, Callable[[dict], str], Callable[[dict], str]]] =
         "🎉", lambda d: "Agent reward paid",
         lambda d: f"{_etb(d.get('amount'))} was added to your commission balance ({'new player' if d.get('reward_type') == 'new_player' else 'player retention'} reward).",
     ),
+    "agent_application_approved": (
+        "🎉", lambda d: "You are now a Melbete agent",
+        lambda d: f"Your agent request was approved. Open the Agent portal from your profile to start. Your commission is {d.get('percent')}%.",
+    ),
+    "agent_application_rejected": (
+        "ℹ️", lambda d: "Agent request update",
+        lambda d: "Your agent request was not approved this time." + (f" Note: {d.get('note')}" if d.get("note") else ""),
+    ),
+    "leaderboard_reward": (
+        "🏆", lambda d: f"You won {_etb(d.get('amount'))} in the leaderboard!",
+        lambda d: f"You finished #{d.get('rank')} in {d.get('campaign')}. The reward is in your bonus balance; wager {_etb(d.get('wager_required'))} to make it withdrawable.",
+    ),
     "referral_reward": (
         "🤝", lambda d: "Referral reward",
         lambda d: f"{_etb(d.get('amount'))} bonus - someone you invited joined Melbete Bingo.",
@@ -84,6 +105,10 @@ TEMPLATES: dict[str, tuple[str, Callable[[dict], str], Callable[[dict], str]]] =
         "🎯", lambda d: "A round is starting",
         lambda d: f"A {_etb(d.get('stake'))} round opens in about {d.get('seconds', 30)} seconds with {d.get('players', 1)} player(s) in. Join now!",
     ),
+    "low_balance": (
+        "👛", lambda d: "Your balance is running low",
+        lambda d: f"You have {_etb(d.get('balance'))} left, which is below {_etb(d.get('threshold'))}. Top up to keep playing - deposits are usually approved within minutes.",
+    ),
     "winback_bonus": (
         "🎁", lambda d: "A free round is waiting",
         lambda d: f"We added {_etb(d.get('amount'))} bonus to your balance (playable, not withdrawable). Come play a round!",
@@ -96,7 +121,7 @@ TEMPLATES: dict[str, tuple[str, Callable[[dict], str], Callable[[dict], str]]] =
 
 
 # Promotional types: skipped entirely for players who opted out, and they carry the /mute hint.
-PROMO_TYPES = {"room_filling", "winback_bonus", "streak_at_risk"}
+PROMO_TYPES = {"room_filling", "winback_bonus", "streak_at_risk", "low_balance"}
 # Types whose Telegram message gets an "Open Melbete Bingo" button.
 OPEN_APP_TYPES = PROMO_TYPES | {"streak_reward"}
 

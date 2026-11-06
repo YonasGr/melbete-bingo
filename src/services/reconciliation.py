@@ -2,13 +2,14 @@
 changes a balance. Runs once a day (default 03:00 Ethiopia time) on whichever instance holds the lease."""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from src.core import loop_lock
 from src.core.config import settings
 from src.core.db import get_pool
+from src.repositories.transaction_repository import TransactionRepository
 from src.services.reconciliation_report import EAT, format_report, persistent, seconds_until
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,31 @@ async def collect() -> dict:
            FROM transactions WHERE status = 'pending'"""))
     return {"negative": negative, "won_over_balance": won_over, "deposit_ledger": deposit_ledger,
             "totals": totals, "pending": pending}
+
+
+async def snapshot(days: int = 14) -> dict:
+    """Live read for the admin Reconciliation screen: the same integrity checks as the 03:00 job plus a
+    per-day deposit/withdrawal table. Read-only. Unlike run_once() it does NOT wait 60s and re-read to
+    drop transactions that were in flight, so a finding here is a prompt to look, not proof."""
+    days = max(1, min(int(days), 90))
+    today = datetime.now(EAT).date()
+    since = datetime(today.year, today.month, today.day, tzinfo=EAT).astimezone(timezone.utc) - timedelta(days=days - 1)
+    report = await collect()
+    daily = await TransactionRepository().daily_money_summary(since)
+    for d in daily:
+        d["day"] = d["day"].isoformat()
+        d["net_cash_etb"] = int(d["deposits_approved_etb"]) - int(d["withdrawals_paid_etb"])
+    problems = bool(report["negative"] or report["won_over_balance"])
+    return {
+        "generated_at": datetime.now(EAT).strftime("%Y-%m-%d %H:%M:%S"),
+        "today": today.isoformat(),
+        "days": days,
+        "ok": not problems,
+        "needs_review": bool(report["deposit_ledger"]),
+        "report": report,
+        "daily": daily,
+        "text": format_report(report, today.strftime("%d %b %Y"))[0],
+    }
 
 
 async def run_once() -> tuple[str, bool]:

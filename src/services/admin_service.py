@@ -20,6 +20,20 @@ from src.models.schemas import AdminUser, PaymentMethod, SystemSettings
 from src.repositories import AdminRepository, PaymentMethodRepository, SettingsRepository
 
 
+from src.services.control_logic import SETTINGS_SPEC
+
+# Human labels for the live game controls (used in validation errors).
+_GAME_RANGE_LABELS = {
+    "stake_amount": "Stake",
+    "stake_amount_real_10": "Real-money stake",
+    "stake_amount_real_50": "Real-money (50) stake",
+    "stake_amount_bonus": "Bonus stake",
+    "lobby_countdown_seconds": "Lobby countdown (seconds)",
+    "draw_interval": "Draw interval (seconds)",
+    "cards_per_player": "Cartelas per player",
+    "min_cartelas_to_start": "Minimum cartelas to start",
+}
+
 class NotSuperAdminError(Exception):
     pass
 
@@ -233,14 +247,35 @@ class AdminService:
         }
         clean = {k: v for k, v in fields.items() if k in allowed and v is not None}
         await self._validate_settings_patch(clean)
+        # `stake_amount` is the legacy name of the real_10 stake (wallet limits and bot messages still
+        # read it). Keep the two in lock-step whichever one the caller sent - the Control Centre only
+        # ever sends stake_amount_real_10.
+        if "stake_amount_real_10" in clean:
+            clean["stake_amount"] = clean["stake_amount_real_10"]
+        elif "stake_amount" in clean:
+            clean["stake_amount_real_10"] = clean["stake_amount"]
         return await self.settings_repo.update(clean)
 
     async def _validate_settings_patch(self, clean: dict) -> None:
         """Cross-field rules shared by live updates and the Control Centre's publish step."""
+        # Range-check the game controls so a typo (0 seconds, a blank field sent as 0, a 5-digit stake)
+        # can never be saved and then break lobbies, the draw loop or the stake maths.
+        for key, label in _GAME_RANGE_LABELS.items():
+            if key not in clean:
+                continue
+            _kind, lo, hi = SETTINGS_SPEC.get(key) or SETTINGS_SPEC["stake_amount_real_10"]
+            raw = clean[key]
+            try:
+                if isinstance(raw, bool) or int(float(raw)) != float(raw):
+                    raise ValueError
+                n = int(float(raw))
+            except (TypeError, ValueError):
+                raise ValueError(f"{label} must be a whole number")
+            if not lo <= n <= hi:
+                raise ValueError(f"{label} must be between {lo} and {hi}")
+            clean[key] = n
         if "min_players_to_start" in clean and int(clean["min_players_to_start"]) < 1:
             raise ValueError("min_players_to_start must be at least 1")
-        if "min_cartelas_to_start" in clean and int(clean["min_cartelas_to_start"]) < 1:
-            raise ValueError("At least 1 cartela is required to start a game")
         curr = await self.get_settings()
         eff_cmin = clean.get("cartela_min", curr.cartela_min)
         eff_cmax = clean.get("cartela_max", curr.cartela_max)

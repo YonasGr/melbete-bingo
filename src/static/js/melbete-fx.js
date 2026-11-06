@@ -94,6 +94,43 @@
     }).observe(numEl, { childList: true, characterData: true, subtree: true });
   }
 
+  // ---- Round cues: countdown ticks, "round started" chime, first-number chime (+ haptics) ------------------
+  // Muted with the same Off switch as the announcer. Sound needs a user gesture on most phones, so the audio
+  // context is created on the first tap; haptics work regardless inside Telegram.
+  let cueCtx = null;
+  const unlockAudio = () => {
+    try {
+      cueCtx = cueCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (cueCtx.state === "suspended") cueCtx.resume();
+    } catch (e) { /* audio unavailable */ }
+  };
+  document.addEventListener("pointerdown", unlockAudio, { passive: true });
+  function tone(freq, start, dur, vol, type) {
+    if (!cueCtx || store.get("melbete_voice", "en") === "off") return;
+    try {
+      const o = cueCtx.createOscillator(), g = cueCtx.createGain(), t = cueCtx.currentTime + start;
+      o.type = type || "sine"; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g); g.connect(cueCtx.destination); o.start(t); o.stop(t + dur + 0.05);
+    } catch (e) { /* ignore */ }
+  }
+  window.MelbeteCue = {
+    tick(secondsLeft) {
+      haptic("light");
+      tone(secondsLeft <= 1 ? 880 : 660, 0, 0.12, 0.12, "sine");
+    },
+    start() {
+      haptic("success");
+      [523, 784].forEach((f, i) => tone(f, i * 0.11, 0.28, 0.16, "triangle"));
+    },
+    firstNumber() {
+      haptic("medium");
+      tone(1047, 0, 0.22, 0.12, "triangle");
+    },
+  };
+
   // ---- Winner celebration ----------------------------------------------------------
   const CROWN = '<svg class="melbete-crown" viewBox="0 0 96 72" aria-hidden="true"><defs><linearGradient id="melbeteG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE08A"/><stop offset="1" stop-color="#E0A21B"/></linearGradient></defs><path d="M8 58 14 20 33 38 48 10 63 38 82 20 88 58Z" fill="url(#melbeteG)" stroke="#B87A0E" stroke-width="2" stroke-linejoin="round"/><rect x="8" y="58" width="80" height="10" rx="3" fill="url(#melbeteG)" stroke="#B87A0E" stroke-width="2"/><circle cx="14" cy="18" r="5" fill="#FFE08A"/><circle cx="48" cy="8" r="5.5" fill="#FFE08A"/><circle cx="82" cy="18" r="5" fill="#FFE08A"/><path d="M48 30 55 42 48 54 41 42Z" fill="#477BFF" stroke="#1d3fa8"/></svg>';
 

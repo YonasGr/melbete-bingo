@@ -9,7 +9,7 @@
 // The bot is pinned to ONE replica (long polling). The api defaults to one
 // replica too: draw loops and lobby timers are protected by database leases,
 // but WebSocket messages only reach every container when REDIS_URL is set.
-// Raise apiMaxReplicas only after the checklist in DEPLOY_AZURE.md.
+// Raise apiMaxReplicas only after the checklist in docs/deployment.md (section "Scaling").
 //
 // Two-phase deploy (scripts/deploy_azure.sh does this for you):
 //   1) deployApps=false -> registry, storage, database, environment
@@ -48,7 +48,7 @@ param postgresStorageGB int = 32
 
 // ---- App settings -------------------------------------------------------------
 @secure()
-@description('Number of API containers. Keep 1 until REDIS_URL is set and the checklist in DEPLOY_AZURE.md ("More than one API container") is done. The bot is always 1.')
+@description('Number of API containers. Keep 1 until REDIS_URL is set and the checklist in docs/deployment.md ("Scaling") is done. The bot is always 1.')
 @minValue(1)
 @maxValue(5)
 param apiMaxReplicas int = 1

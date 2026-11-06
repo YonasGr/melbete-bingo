@@ -64,12 +64,12 @@
       if (!isFinite(target) || target === shown) return;
       const from = shown, dec = raw.includes(".") ? Math.min(2, raw.split(".")[1].length) : 0;
       shown = target;
-      const card = bal.closest(".wallet-summary");
+      const card = bal.closest(".wallet-summary, .header-balance");
       if (card) {
         card.classList.remove("melbete-bal-up", "melbete-bal-down");
         void card.offsetWidth;                       // restart the flash
         card.classList.add(target > from ? "melbete-bal-up" : "melbete-bal-down");
-        if (target > from && !reduce) {                // a few coins pop out of the balance card
+        if (target > from && !reduce && !card.matches(".header-balance")) {                // a few coins pop out of the balance card
           for (let i = 0; i < 7; i++) {
             const c = document.createElement("span");
             c.className = "melbete-coin-pop";

@@ -1,4 +1,5 @@
 """Postgres repository for wallet transactions (the audit ledger)."""
+from datetime import datetime
 from typing import List, Optional
 
 from src.models.schemas import Transaction
@@ -108,6 +109,43 @@ class TransactionRepository(BaseRepository):
                 limit,
             )
         return [Transaction(**r) for r in rows]
+
+    async def list_for_export(
+        self, kind: str, start: datetime, end: datetime, status_filter: Optional[str] = None, limit: int = 50_000,
+    ) -> List[Transaction]:
+        """Deposits ('deposit') or withdrawals ('withdrawal') requested in [start, end), oldest first, for the
+        finance CSV. `limit` is a hard cap so one export can never pull the whole ledger into memory."""
+        prefix = "top_up" if kind == "deposit" else "withdrawal"
+        types = {"approved": [f"{prefix}_approved"], "rejected": [f"{prefix}_rejected"], "pending": [f"{prefix}_pending"]}
+        wanted = types.get(status_filter or "", [f"{prefix}_approved", f"{prefix}_rejected", f"{prefix}_pending"])
+        rows = await self._fetch(
+            "SELECT * FROM transactions WHERE type = ANY($1) AND created_at >= $2 AND created_at < $3 "
+            "ORDER BY created_at ASC, id ASC LIMIT $4",
+            wanted, start, end, int(limit),
+        )
+        return [Transaction(**r) for r in rows]
+
+    async def daily_money_summary(self, since: datetime) -> list[dict]:
+        """Per Ethiopia-time day: deposits and withdrawals by outcome, newest day first. A request counts on
+        the day it was resolved (when money actually moved); a still-pending one on the day it was made."""
+        rows = await self._fetch(
+            """SELECT (COALESCE(resolved_at, created_at) AT TIME ZONE 'Africa/Addis_Ababa')::date AS day,
+                      COUNT(*) FILTER (WHERE type = 'top_up_approved') AS deposits_approved,
+                      COALESCE(SUM(amount) FILTER (WHERE type = 'top_up_approved'), 0) AS deposits_approved_etb,
+                      COUNT(*) FILTER (WHERE type = 'top_up_rejected') AS deposits_rejected,
+                      COUNT(*) FILTER (WHERE type = 'top_up_pending') AS deposits_pending,
+                      COUNT(*) FILTER (WHERE type = 'withdrawal_approved') AS withdrawals_paid,
+                      COALESCE(SUM(ABS(amount)) FILTER (WHERE type = 'withdrawal_approved'), 0) AS withdrawals_paid_etb,
+                      COUNT(*) FILTER (WHERE type = 'withdrawal_rejected') AS withdrawals_rejected,
+                      COUNT(*) FILTER (WHERE type = 'withdrawal_pending') AS withdrawals_pending
+               FROM transactions
+               WHERE type IN ('top_up_approved','top_up_rejected','top_up_pending',
+                              'withdrawal_approved','withdrawal_rejected','withdrawal_pending')
+                 AND COALESCE(resolved_at, created_at) >= $1
+               GROUP BY day ORDER BY day DESC""",
+            since,
+        )
+        return [dict(r) for r in rows]
 
     async def list_by_player(self, player_id: str, limit: int = 50) -> List[Transaction]:
         rows = await self._fetch(

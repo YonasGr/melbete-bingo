@@ -46,3 +46,38 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 @media(pointer:coarse){.admin-nav-item,.bottom-nav-item,.filter-tabs button,.segmented button,.btn,.primary-btn,.secondary-btn,.icon-btn,.user-modal-tab{min-height:44px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 @media(max-width:600px){.settings-savebar{position:static;bottom:auto}}
+
+/* Agent registration: player picker */
+.player-pick-list { display: grid; gap: 6px; margin-top: 6px; }
+.player-pick { display: grid; gap: 2px; text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line, rgb(128 128 128 / .3)); background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.player-pick:hover, .player-pick:focus-visible { border-color: var(--accent, #c9a227); }
+
+/* Leaderboard admin tables */
+.table-scroll { overflow-x: auto; margin: 6px 0 14px; }
+.data-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.data-table th, .data-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line, rgb(128 128 128 / .25)); white-space: nowrap; }
+.data-table th { font-weight: 700; opacity: .75; }
+
+/* Attention badges on admin tabs */
+.admin-nav-item, .sheet-tile { position: relative; }
+.attn-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: auto; padding: 0 5px; border-radius: 9px; background: #E5484D; color: #fff; font: 800 .68rem/1 system-ui, sans-serif; }
+.sheet-tile .attn-badge { position: absolute; top: 6px; right: 6px; margin: 0; }
+
+/* Reconciliation screen + finance export */
+.table-scroll{overflow-x:auto;max-width:100%}
+.data-table tfoot th{border-top:2px solid var(--line, rgb(128 128 128 / .35));opacity:1}
+.export-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.6rem}
+.export-fields label{display:flex;flex-direction:column;gap:.2rem;font-size:.62rem;font-weight:700;color:var(--ink-600)}
+.export-fields input[type=date],.export-fields select{min-height:38px;width:auto;padding:0 .5rem;border:1px solid var(--line-strong);border-radius:var(--radius-sm);background:#fff;font-size:.74rem}
+.recon-banner{margin:0 0 .7rem;padding:.7rem .9rem;border-radius:var(--radius-md);font-size:.75rem;font-weight:700}
+.recon-ok{background:var(--green-100);color:var(--green-700)}
+.recon-alert{background:var(--red-100);color:var(--red-600)}
+.recon-review{background:var(--gold-100);color:var(--gold-600)}
+.recon-finding{margin-top:.8rem}
+
+/* leaderboard reward ladder editor */
+.lb-tiers { display: grid; gap: .4rem; }
+.lb-tier-row { display: grid; grid-template-columns: 3.2rem auto minmax(0, 1fr) minmax(0, 1.4fr) auto auto; gap: .35rem; align-items: center; font-size: .85rem; }
+.lb-tier-row input { min-width: 0; padding: .4rem .5rem; }
+.lb-tier-from { font-weight: 700; font-variant-numeric: tabular-nums; }
+.lb-tier-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }

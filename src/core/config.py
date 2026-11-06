@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # --- Database (any standard Postgres) -------------------------------
     # Any standard Postgres connection string works here - Supabase,
     # Azure Database for PostgreSQL, self-hosted, etc. See
-    # MIGRATING_TO_SUPABASE.md for the Supabase-specific walkthrough.
+    # docs/deployment.md for the Supabase-specific walkthrough.
     # If connecting through a transaction-mode PgBouncer pooler (e.g.
     # Supabase's pooler, host contains "pooler.supabase.com", port 6543),
     # leave db_use_prepared_statements=False (the default) - see the note
@@ -95,10 +95,10 @@ class Settings(BaseSettings):
             logging.getLogger(__name__).warning("%s (allowed outside production)", msg)
         return self
 
-    # Rounds with MORE than this many distinct players can have several winners: after every drawn
+    # (Deprecated) Used to gate split winners to rounds with MORE than this many players; now ALL rounds split. After every drawn
     # number, every player whose BINGO is completed by that same last number wins and the prize is
     # split equally (see RoomService.settle_round_winners). 0 disables the feature.
-    multi_winner_min_players: int = 10
+    multi_winner_min_players: int = 10  # DEPRECATED, unused: every round now splits ties equally
     lobby_countdown_seconds: int = 30  # time players get to pick cartelas before auto-start
     # Non-stop rounds: this many seconds after a round ends (winner screen shown) the server starts the
     # next round by itself, without waiting for anyone to tap "Go to Lobby". 0 = old manual behaviour.
@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     # messages respect each player's /mute opt-out and quiet hours (Ethiopia time, EAT = UTC+3).
     # "days:ETB" pairs: reward when a player has played this many days IN A ROW. Empty = off.
     engagement_streak_rewards: str = "3:10,7:30"
+    engagement_missions: str = "3:20,5:40,10:80"  # daily missions "rounds:bonus ETB"; empty disables them
+    engagement_missions_daily_budget_etb: int = 5000  # hard cap on mission bonus paid per day (house protection)
     engagement_winback_days: int = 7  # a player who has not played for this many days gets a free round
     engagement_winback_bonus_etb: int = 10  # 0 disables win-back
     engagement_winback_cooldown_days: int = 30  # at most one win-back bonus per player per this period
@@ -116,6 +118,7 @@ class Settings(BaseSettings):
     engagement_nudge_cooldown_hours: int = 6  # at most one "round starting" nudge per player per period
     engagement_nudge_max_recipients: int = 100  # per nudge batch
     engagement_nudge_batch_gap_minutes: int = 10  # at most one nudge batch per track per period
+    engagement_low_balance_threshold_etb: int = 20  # tell a player once a day when their balance drops below this after a round; 0 disables
     engagement_loop_minutes: int = 30  # how often the win-back / streak-reminder job runs; 0 disables it
     engagement_quiet_start_hour: int = 22  # no promotional messages from this hour (EAT) ...
     engagement_quiet_end_hour: int = 7  # ... until this hour

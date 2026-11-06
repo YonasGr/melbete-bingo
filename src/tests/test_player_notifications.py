@@ -134,3 +134,29 @@ async def test_schedule_notify_runs_in_background_and_never_raises(monkeypatch):
 
 def test_schedule_notify_without_an_event_loop_is_a_silent_noop():
     pn.schedule_notify("tg_111", "win", {"payout": 10})  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Received confirmations, win balance and the low-balance (promotional) message
+# ---------------------------------------------------------------------------
+def test_received_templates_tell_the_player_what_happens_next():
+    _, title, body = render("deposit_received", {"amount": 500})
+    assert "received" in title.lower() and "500 ETB" in body and "approved" in body
+    _, title, body = render("withdrawal_received", {"amount": 700})
+    assert "700 ETB" in body and "held" in body
+
+
+def test_win_message_shows_the_new_balance_only_when_known():
+    assert "Your balance is now 1,250 ETB" in render("win", {"payout": 900, "balance": 1250})[2]
+    assert "balance is now" not in render("win", {"payout": 900})[2]
+
+
+def test_low_balance_is_promotional_so_muted_players_get_nothing():
+    assert "low_balance" in pn.PROMO_TYPES
+    muted = Player(id="tg_111", telegram_id="111", display_name="Abebe", promo_opt_out=True)
+    n, sent = make(players=[muted])
+    assert asyncio.run(n.notify("tg_111", "low_balance", {"balance": 5, "threshold": 20}, "k")) is None
+    assert sent == []
+    n, sent = make()
+    assert asyncio.run(n.notify("tg_111", "low_balance", {"balance": 5, "threshold": 20}, "k"))
+    assert len(sent) == 1 and "/mute" in sent[0][1]

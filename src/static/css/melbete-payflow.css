@@ -1,0 +1,105 @@
+/* Melbete Bingo - payment flow: one task per step, fixed bottom button, chips, saved-account card,
+   inline errors, review and receipt timeline. Loaded last; only touches .mb-pf modals and the receipt. */
+
+.mb-pf .hidden { display: none !important; }
+.mb-pf .payment-step, .mb-pf > .mb-steps-wrap { display: none !important; }
+#withdraw-form-step.pf-gone { display: none !important; }
+
+/* one step visible at a time */
+.mb-pf[data-step="0"] [data-pf]:not([data-pf~="0"]),
+.mb-pf[data-step="1"] [data-pf]:not([data-pf~="1"]),
+.mb-pf[data-step="2"] [data-pf]:not([data-pf~="2"]) { display: none !important; }
+
+/* soft step transition */
+.mb-pf.mb-pf-anim [data-pf] { animation: mb-pf-in .24s ease both; }
+@keyframes mb-pf-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .mb-pf.mb-pf-anim [data-pf] { animation: none; } }
+
+/* progress line */
+.mb-pf-bar { margin: .35rem 0 1rem; }
+.mb-pf-track { height: 4px; border-radius: 4px; background: var(--melbete-border, #34312B); overflow: hidden; }
+.mb-pf-track i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--melbete-gold, #FFC933); transition: width .3s ease; }
+.mb-pf-barlabel { margin: .45rem 0 0; font-size: .74rem; font-weight: 700; color: var(--melbete-ink-2, #B3AEA2); }
+
+.mb-pf-h { margin: .25rem 0 .7rem; font-size: 1.05rem; font-weight: 800; color: var(--melbete-ink, #F8FAFC); line-height: 1.3; }
+.mb-pf-hint { margin: .6rem 0 0; font-size: .84rem; color: var(--melbete-ink-2, #B3AEA2); line-height: 1.5; }
+
+/* large inputs with a numeric keypad on phones */
+.mb-pf input[type="number"], .mb-pf input[type="text"], .mb-pf textarea { min-height: 52px; font-size: 1.05rem; }
+.mb-pf #deposit-amount, .mb-pf #withdraw-amount { font-size: 1.35rem; font-weight: 800; }
+
+/* quick amount chips */
+.mb-pf-chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: .7rem 0 .2rem; }
+.mb-pf-chip { flex: 1 1 calc(33% - .5rem); min-width: 74px; min-height: 44px; border-radius: 12px; border: 1px solid rgb(255 255 255 / .14);
+  background: rgb(255 255 255 / .05); color: var(--melbete-ink, #F8FAFC); font: 800 .95rem/1 var(--melbete-font, inherit); cursor: pointer; transition: all .15s ease; }
+.mb-pf-chip:active { transform: scale(.96); }
+.mb-pf-chip.on { background: var(--melbete-gold, #FFC933); border-color: var(--melbete-gold, #FFC933); color: #14110A; }
+.mb-pf-get { margin: .6rem 0 0; font-weight: 800; color: var(--melbete-gold, #FFC933); }
+.mb-pf-bonus { margin: .25rem 0 0; font-size: .84rem; font-weight: 700; color: #6EE7A0; }
+
+/* proof tick list */
+.mb-pf-checks { list-style: none; margin: .8rem 0 0; padding: 0; display: grid; gap: .45rem; }
+.mb-pf-checks li { display: flex; align-items: flex-start; gap: .55rem; font-size: .86rem; color: var(--melbete-ink-2, #B3AEA2); }
+.mb-pf-checks li b { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--melbete-border, #4a463d); font-size: .7rem; line-height: 1; }
+.mb-pf-checks li.ok { color: var(--melbete-ink, #F8FAFC); }
+.mb-pf-checks li.ok b { background: var(--melbete-success, #22C55E); border-color: var(--melbete-success, #22C55E); color: #06210F; }
+.mb-pf-checks li.soft b { border-color: var(--melbete-gold, #FFC933); color: var(--melbete-gold, #FFC933); }
+.mb-pf-trust { margin: .9rem 0 0; text-align: center; font-size: .78rem; color: var(--melbete-ink-2, #B3AEA2); }
+
+/* saved account card + review */
+.mb-pf-saved { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin: .7rem 0 .9rem; padding: .85rem 1rem; border-radius: 14px;
+  border: 1px solid rgb(245 196 81 / .35); background: rgb(255 255 255 / .05); }
+.mb-pf-saved-l { display: grid; gap: .15rem; min-width: 0; }
+.mb-pf-saved-k { font-size: .7rem; font-weight: 700; letter-spacing: .03em; color: var(--melbete-ink-2, #B3AEA2); }
+.mb-pf-saved-v { font-size: 1rem; color: var(--melbete-ink, #F8FAFC); overflow-wrap: anywhere; }
+.mb-pf-link { flex: none; min-height: 44px; padding: 0 .4rem; border: 0; background: none; color: var(--melbete-gold, #FFC933); font: 800 .9rem/1 var(--melbete-font, inherit); cursor: pointer; }
+.mb-pf-review { margin: 0; display: grid; gap: .1rem; border-radius: 14px; border: 1px solid rgb(255 255 255 / .10); background: rgb(255 255 255 / .04); overflow: hidden; }
+.mb-pf-review div { display: flex; justify-content: space-between; gap: 1rem; padding: .8rem 1rem; }
+.mb-pf-review div + div { border-top: 1px solid rgb(255 255 255 / .08); }
+.mb-pf-review dt { color: var(--melbete-ink-2, #B3AEA2); font-size: .84rem; }
+.mb-pf-review dd { margin: 0; font-weight: 800; text-align: right; overflow-wrap: anywhere; color: var(--melbete-ink, #F8FAFC); }
+
+/* fixed bottom bar: one gold primary button, thumb-reachable */
+.mb-pf-foot { position: sticky; bottom: 0; z-index: 4; margin: 1rem -1.375rem -2rem; padding: .8rem 1.375rem calc(.9rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(180deg, rgb(17 17 23 / 0), rgb(17 17 23 / .96) 28%); }
+.mb-pf-btns { display: flex; gap: .6rem; }
+.mb-pf-btns > button { flex: 1; margin: 0; min-height: 52px; }
+.mb-pf-btns > .mb-pf-back { flex: 0 0 34%; }
+.mb-pf-err { display: none; margin: 0 0 .55rem; padding: .5rem .75rem; border-radius: 10px; background: rgb(239 68 68 / .14); color: #FCA5A5; font-size: .84rem; font-weight: 700; }
+.mb-pf-err.on { display: block; }
+
+/* receipt: status timeline */
+.rc-tl { list-style: none; margin: .9rem auto .2rem; padding: 0; display: flex; justify-content: space-between; gap: .4rem; max-width: 320px; position: relative; }
+.rc-tl::before { content: ""; position: absolute; top: 12px; left: 16%; right: 16%; height: 2px; background: var(--melbete-border, #34312B); }
+.rc-tl li { position: relative; flex: 1; display: grid; justify-items: center; gap: .3rem; font-size: .72rem; color: var(--melbete-ink-2, #B3AEA2); font-weight: 600; }
+.rc-tl li i { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; font-style: normal; font-weight: 800; font-size: .72rem;
+  background: var(--melbete-surface, #15151B); border: 2px solid var(--melbete-border, #34312B); position: relative; z-index: 1; }
+.rc-tl li.done i { background: var(--melbete-success, #22C55E); border-color: var(--melbete-success, #22C55E); color: #06210F; }
+.rc-tl li.now i { border-color: var(--melbete-gold, #FFC933); color: var(--melbete-gold, #FFC933); box-shadow: 0 0 0 4px rgb(255 201 51 / .16); }
+.rc-tl li.done, .rc-tl li.now { color: var(--melbete-ink, #F8FAFC); }
+
+/* amount + Max stay on one line */
+.mb-pf .amount-row { align-items: stretch; margin-top: .3rem; }
+.mb-pf .amount-row input { flex: 1 1 auto; min-width: 0; margin: 0; }
+.mb-pf .amount-row .amount-max { flex: 0 0 auto; width: auto; min-width: 76px; margin: 0; min-height: 52px; }
+
+/* ---- Premium logo badge: white disc, thin gold ring, soft glow (method cards + account card) ---- */
+#deposit-methods .method-card-logo,
+#withdraw-methods .method-card-logo,
+.account-info-box .account-info-logo {
+  --ring: #FFC933;
+  box-sizing: border-box; border-radius: 50%; object-fit: contain; background: #fff;
+  border: 1.5px solid var(--ring);
+  box-shadow: 0 0 0 3px rgb(255 201 51 / .14), 0 0 18px rgb(255 201 51 / .35), 0 4px 10px rgb(0 0 0 / .45), inset 0 0 0 2px #fff;
+  transition: transform .25s ease, box-shadow .25s ease;
+}
+#deposit-methods .method-card-logo,
+#withdraw-methods .method-card-logo { width: 60px; height: 60px; padding: 7px; }
+.account-info-box .account-info-logo { width: 52px; height: 52px; padding: 6px; margin-top: 0; flex-shrink: 0; }
+#deposit-methods .method-card.selected .method-card-logo,
+#withdraw-methods .method-card.selected .method-card-logo {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 4px rgb(255 201 51 / .28), 0 0 26px rgb(255 201 51 / .6), 0 6px 14px rgb(0 0 0 / .5), inset 0 0 0 2px #fff;
+}
+#deposit-methods .method-card-logo.placeholder,
+#withdraw-methods .method-card-logo.placeholder { padding: 0; background: var(--melbete-surface-2, #1F1F27); }

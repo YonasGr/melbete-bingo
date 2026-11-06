@@ -455,11 +455,11 @@ async def _seed(wallets, player_id, balance=0, won=0, bonus=0):
 
 
 @pytest.mark.asyncio
-async def test_mixed_stake_spends_real_first_and_records_split(wallets):
+async def test_mixed_stake_spends_bonus_first_and_records_split(wallets):
     await _seed(wallets, "p1", balance=100, bonus=30)
     wallet, funded_by = await wallets.debit_for_stake("p1", 50, "room-1", funding_mode="any")
-    assert funded_by == "real"
-    assert (wallet.balance, wallet.bonus_balance) == (50, 30)
+    assert funded_by == "mixed:20:30"
+    assert (wallet.balance, wallet.bonus_balance) == (80, 0)
 
 
 @pytest.mark.asyncio
@@ -533,3 +533,85 @@ async def test_rejecting_a_withdrawal_twice_refunds_once(wallets):
     await wallets.approve_withdrawal(txn.id, "admin-3")  # late approve of a rejected request: no-op
     w = await wallets.get_or_create_wallet("p11")
     assert (w.balance, w.won_balance) == (500, 300)
+
+
+# ---------------------------------------------------------------------------
+# Audit trail for decisions made from the Telegram bot (web decisions are audited by the admin router)
+# ---------------------------------------------------------------------------
+class _AuditRecorder:
+    def __init__(self):
+        self.calls = []
+
+    async def audit(self, actor_id, action, **kw):
+        self.calls.append((actor_id, action, kw))
+
+    # Permissive stand-ins for the checks request_deposit() makes through the same control object.
+    async def flag_block(self, flag):
+        return ""
+
+    async def player_money_block(self, player_id, kind, amount):
+        return ""
+
+    async def should_auto_approve(self, player_id, amount, has_url):
+        return False, "auto-approve is off"
+
+
+@pytest.fixture
+def audit_log(monkeypatch):
+    rec = _AuditRecorder()
+    monkeypatch.setattr(WalletService, "_control", staticmethod(lambda: rec))
+    return rec
+
+
+@pytest.mark.asyncio
+async def test_bot_approval_is_audited(wallets, audit_log):
+    txn = await wallets.request_deposit("player-1", 500, "telebirr")
+    await wallets.approve_topup(txn.id, "admin-7", source="bot")
+    assert [(a, act) for a, act, _ in audit_log.calls] == [("admin-7", "deposit.approve")]
+    assert audit_log.calls[0][2]["target_id"] == txn.id
+    assert audit_log.calls[0][2]["after"]["source"] == "bot"
+
+
+@pytest.mark.asyncio
+async def test_bot_rejection_is_audited(wallets, audit_log):
+    txn = await wallets.request_deposit("player-1", 500, "telebirr")
+    await wallets.reject_topup(txn.id, "admin-7", "wrong amount", source="bot")
+    assert [(a, act) for a, act, _ in audit_log.calls] == [("admin-7", "deposit.reject")]
+
+
+@pytest.mark.asyncio
+async def test_web_decision_is_not_double_logged_and_repeat_bot_tap_is_ignored(wallets, audit_log):
+    txn = await wallets.request_deposit("player-1", 500, "telebirr")
+    await wallets.approve_topup(txn.id, "admin-1")                    # web: the router audits, not the service
+    await wallets.approve_topup(txn.id, "admin-2", source="bot")      # already resolved: a no-op, nothing to log
+    assert audit_log.calls == []
+
+
+# ---------------------------------------------------------------------------
+# "Request received" confirmations to the player
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def player_msgs(monkeypatch):
+    from src.services import player_notifications as pn
+
+    sent = []
+    monkeypatch.setattr(pn, "schedule_notify", lambda pid, t, data=None, dedupe_key=None: sent.append((pid, t, data, dedupe_key)))
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_pending_deposit_sends_a_received_message_then_the_approval(wallets, player_msgs):
+    txn = await wallets.request_deposit("player-1", 500, "telebirr")
+    assert player_msgs == [("player-1", "deposit_received", {"amount": 500}, f"deposit_received:{txn.id}")]
+    await wallets.approve_topup(txn.id, "admin-1")
+    assert [m[1] for m in player_msgs] == ["deposit_received", "deposit_approved"]
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_request_sends_a_received_message(wallets, player_msgs):
+    dep = await wallets.request_deposit("player-1", 500, "telebirr")
+    await wallets.approve_topup(dep.id, "admin-1")
+    await wallets.credit_payout("player-1", 250, "room-1", funded_by="real")
+    player_msgs.clear()
+    txn = await wallets.request_withdrawal("player-1", 200, "telebirr", "Test Player", "0912345678")
+    assert player_msgs == [("player-1", "withdrawal_received", {"amount": 200}, f"withdrawal_received:{txn.id}")]

@@ -4,15 +4,14 @@ Database for PostgreSQL, self-hosted, etc.).
 
 This module is the single place that knows how to connect to the
 database. Every repository in `src/repositories` gets its connection pool
-from here - mirrors the role `src/core/firebase.py` used to play.
+from here.
 
 We use `asyncpg` directly against a plain Postgres connection string
 rather than any provider-specific REST client, so that:
   - queries don't add an extra HTTP hop on top of the DB round trip
     (this app is latency-sensitive - see the cartela-picking speed work
     in the history of this codebase), and
-  - the async driver integrates directly with FastAPI's event loop the
-    same way the old Firestore AsyncClient did.
+  - the async driver integrates directly with FastAPI's event loop.
 
 If DATABASE_URL points at a transaction-mode PgBouncer pooler (Supabase's
 recommended pooler is the common case), asyncpg's server-side prepared
@@ -64,7 +63,7 @@ async def get_pool() -> asyncpg.Pool:
             raise RuntimeError(
                 "DATABASE_URL is not set - point it at your Postgres instance "
                 "(Supabase, Azure Database for PostgreSQL, self-hosted, etc). "
-                "See MIGRATING_TO_SUPABASE.md if you're using Supabase."
+                "See docs/deployment.md if you're using Supabase."
             )
         _pool = await asyncpg.create_pool(
             dsn=settings.database_url,

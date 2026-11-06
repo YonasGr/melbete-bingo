@@ -37,6 +37,9 @@ async def get_wallet(
         "balance": wallet.balance,
         "bonus_balance": wallet.bonus_balance,
         "won_balance": wallet.won_balance,
+        # Only game winnings can be withdrawn (deposits and bonus are play-only). Never more than the real
+        # balance, never negative - this is the same cap the withdrawal hold enforces.
+        "withdrawable_balance": max(0, min(int(wallet.won_balance or 0), int(wallet.balance or 0))),
         "lifetime_deposited": wallet.lifetime_deposited,
     }
 

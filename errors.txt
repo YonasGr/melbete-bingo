@@ -1,0 +1,72 @@
+=================================== FAILURES ===================================
+____________ test_refresh_tier_promotes_and_never_lowers_base_rate _____________
+src/tests/test_agent_rewards.py:155: in test_refresh_tier_promotes_and_never_lowers_base_rate
+    assert max(agent.commission_bps, agent.tier_bps) == 400
+E   AssertionError: assert 500 == 400
+E    +  where 500 = max(300, 500)
+E    +    where 300 = Agent(id='a1', player_id='tg_111', agent_code='AGTEST', status='active', commission_bps=300, float_balance=0, commission_balance=0, tier_bps=500, tier_label='Gold', created_by='admin', created_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369413, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369415, tzinfo=datetime.timezone.utc)).commission_bps
+E    +    and   500 = Agent(id='a1', player_id='tg_111', agent_code='AGTEST', status='active', commission_bps=300, float_balance=0, commission_balance=0, tier_bps=500, tier_label='Gold', created_by='admin', created_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369413, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369415, tzinfo=datetime.timezone.utc)).tier_bps
+_____ test_nudge_goes_to_recent_players_outside_the_room_once_per_cooldown _____
+src/tests/test_engagement_service.py:191: in test_nudge_goes_to_recent_players_outside_the_room_once_per_cooldown
+    assert await svc.nudge_round_starting("real_10", 10, [], 30) == 0
+E   assert 1 == 0
+______________ test_cancelled_round_auto_rotates_without_advance _______________
+src/tests/test_room_service.py:867: in test_cancelled_round_auto_rotates_without_advance
+    assert cancelled.state == "cancelled"
+E   AssertionError: assert 'waiting' == 'cancelled'
+E     - cancelled
+E     + waiting
+____________ test_exactly_ten_players_keeps_single_winner_behavior _____________
+src/tests/test_room_service.py:968: in test_exactly_ten_players_keeps_single_winner_behavior
+    assert outcome.won is True and outcome.pending is False
+E   AttributeError: 'ClaimOutcome' object has no attribute 'pending'
+___________ test_manual_claim_settles_everyone_and_never_pays_twice ____________
+src/tests/test_room_service.py:1073: in test_manual_claim_settles_everyone_and_never_pays_twice
+    assert (await service.claim_win(room.id, "player-2", cards[1].id)).won is True
+E   AssertionError: assert False is True
+E    +  where False = ClaimOutcome(is_valid=True, message='Your win is already confirmed - check the results screen!', won=False, card=Card(id='33eabe0e-2370-43bd-ae25-d71dd5fd9c3a', room_id='866d7da1-1ed2-4109-9c3f-c3ad0345ea68', owner_id='player-2', variant='75', cartela_number=2, grid=[[{'value': 6, 'marked': False, 'free': False}, {'value': 21, 'marked': False, 'free': False}, {'value': 45, 'marked': False, 'free': False}, {'value': 48, 'marked': True, 'free': False}, {'value': 63, 'marked': False, 'free': False}], [{'value': 7, 'marked': True, 'free': False}, {'value': 18, 'marked': False, 'free': False}, {'value': 31, 'marked': False, 'free': False}, {'value': 60, 'marked': False, 'free': False}, {'value': 66, 'marked': True, 'free': False}], [{'value': 15, 'marked': False, 'free': False}, {'value': 17, 'marked': False, 'free': False}, {'value': None, 'marked': True, 'free': True}, {'value': 51, 'marked': False, 'free': False}, {'value': 71, 'marked': False, 'free': False}], [{'value': 13, 'marked': True, 'free': False}, {'value': 22, 'marked': True, 'free': False}, {'value': 39, 'marked': True, 'free': False}, {'value': 59, 'marked': True, 'free': False}, {'value': 72, 'marked': True, 'free': False}], [{'value': 2, 'marked': True, 'free': False}, {'value': 25, 'marked': False, 'free': False}, {'value': 37, 'marked': True, 'free': False}, {'value': 46, 'marked': True, 'free': False}, {'value': 73, 'marked': False, 'free': False}]], funded_by='real', created_at=datetime.datetime(2026, 11, 6, 14, 10, 3, 37235, tzinfo=datetime.timezone.utc)), payout=0, winner=None).won
+____________ test_mixed_stake_spends_bonus_first_and_records_split _____________
+src/tests/test_wallet_service.py:461: in test_mixed_stake_spends_bonus_first_and_records_split
+    assert funded_by == "mixed:20:30"
+E   AssertionError: assert 'real' == 'mixed:20:30'
+E     - mixed:20:30
+E     + real
+__________________ test_concurrent_acquire_has_single_winner ___________________
+src/tests/integration/test_loop_lock.py:39: in test_concurrent_acquire_has_single_winner
+    assert results.count(True) == 1
+E   assert 0 == 1
+E    +  where 0 = <built-in method count of list object at 0x76e0b12ae140>(True)
+E    +    where <built-in method count of list object at 0x76e0b12ae140> = [False, False, False, False, False, False, ...].count
+_______________________ test_shutdown_stops_reacquiring ________________________
+src/tests/integration/test_loop_lock.py:48: in test_shutdown_stops_reacquiring
+    assert await _as("B", "draw:r4", 30) is True   # our lease was handed over
+E   assert False is True
+___________ test_idempotent_request_executes_once_under_concurrency ____________
+src/tests/integration/test_wallet_concurrency.py:144: in test_idempotent_request_executes_once_under_concurrency
+    assert sum(r == {"transaction_id": "t-1"} for r in results) == 1
+E   assert 24 == 1
+E    +  where 24 = sum(<generator object test_idempotent_request_executes_once_under_concurrency.<locals>.<genexpr> at 0x76e0b1413300>)
+=========================== short test summary info ============================
+FAILED src/tests/test_agent_rewards.py::test_refresh_tier_promotes_and_never_lowers_base_rate - AssertionError: assert 500 == 400
+ +  where 500 = max(300, 500)
+ +    where 300 = Agent(id='a1', player_id='tg_111', agent_code='AGTEST', status='active', commission_bps=300, float_balance=0, commission_balance=0, tier_bps=500, tier_label='Gold', created_by='admin', created_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369413, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369415, tzinfo=datetime.timezone.utc)).commission_bps
+ +    and   500 = Agent(id='a1', player_id='tg_111', agent_code='AGTEST', status='active', commission_bps=300, float_balance=0, commission_balance=0, tier_bps=500, tier_label='Gold', created_by='admin', created_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369413, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 11, 6, 14, 10, 2, 369415, tzinfo=datetime.timezone.utc)).tier_bps
+FAILED src/tests/test_engagement_service.py::test_nudge_goes_to_recent_players_outside_the_room_once_per_cooldown - assert 1 == 0
+FAILED src/tests/test_room_service.py::test_cancelled_round_auto_rotates_without_advance - AssertionError: assert 'waiting' == 'cancelled'
+  - cancelled
+  + waiting
+FAILED src/tests/test_room_service.py::test_exactly_ten_players_keeps_single_winner_behavior - AttributeError: 'ClaimOutcome' object has no attribute 'pending'
+FAILED src/tests/test_room_service.py::test_manual_claim_settles_everyone_and_never_pays_twice - AssertionError: assert False is True
+ +  where False = ClaimOutcome(is_valid=True, message='Your win is already confirmed - check the results screen!', won=False, card=Card(id='33eabe0e-2370-43bd-ae25-d71dd5fd9c3a', room_id='866d7da1-1ed2-4109-9c3f-c3ad0345ea68', owner_id='player-2', variant='75', cartela_number=2, grid=[[{'value': 6, 'marked': False, 'free': False}, {'value': 21, 'marked': False, 'free': False}, {'value': 45, 'marked': False, 'free': False}, {'value': 48, 'marked': True, 'free': False}, {'value': 63, 'marked': False, 'free': False}], [{'value': 7, 'marked': True, 'free': False}, {'value': 18, 'marked': False, 'free': False}, {'value': 31, 'marked': False, 'free': False}, {'value': 60, 'marked': False, 'free': False}, {'value': 66, 'marked': True, 'free': False}], [{'value': 15, 'marked': False, 'free': False}, {'value': 17, 'marked': False, 'free': False}, {'value': None, 'marked': True, 'free': True}, {'value': 51, 'marked': False, 'free': False}, {'value': 71, 'marked': False, 'free': False}], [{'value': 13, 'marked': True, 'free': False}, {'value': 22, 'marked': True, 'free': False}, {'value': 39, 'marked': True, 'free': False}, {'value': 59, 'marked': True, 'free': False}, {'value': 72, 'marked': True, 'free': False}], [{'value': 2, 'marked': True, 'free': False}, {'value': 25, 'marked': False, 'free': False}, {'value': 37, 'marked': True, 'free': False}, {'value': 46, 'marked': True, 'free': False}, {'value': 73, 'marked': False, 'free': False}]], funded_by='real', created_at=datetime.datetime(2026, 11, 6, 14, 10, 3, 37235, tzinfo=datetime.timezone.utc)), payout=0, winner=None).won
+FAILED src/tests/test_wallet_service.py::test_mixed_stake_spends_bonus_first_and_records_split - AssertionError: assert 'real' == 'mixed:20:30'
+  - mixed:20:30
+  + real
+FAILED src/tests/integration/test_loop_lock.py::test_concurrent_acquire_has_single_winner - assert 0 == 1
+ +  where 0 = <built-in method count of list object at 0x76e0b12ae140>(True)
+ +    where <built-in method count of list object at 0x76e0b12ae140> = [False, False, False, False, False, False, ...].count
+FAILED src/tests/integration/test_loop_lock.py::test_shutdown_stops_reacquiring - assert False is True
+FAILED src/tests/integration/test_wallet_concurrency.py::test_idempotent_request_executes_once_under_concurrency - assert 24 == 1
+ +  where 24 = sum(<generator object test_idempotent_request_executes_once_under_concurrency.<locals>.<genexpr> at 0x76e0b1413300>)
+======================== 9 failed, 288 passed in 11.05s ========================
+Error: Process completed with exit code 1.
+

@@ -6,10 +6,10 @@
   const user = tg?.initDataUnsafe?.user;
   if (!user) return;  // outside Telegram there is no verified identity to show an inbox for
   const playerId = `tg_${user.id}`;
-  const POLL_MS = 45000;
+  const POLL_MS = 20000;
   const ICONS = {
     deposit_approved: "✅", deposit_rejected: "❌", withdrawal_approved: "💸", withdrawal_rejected: "↩️",
-    win: "🏆", bonus_granted: "🎁", agent_topup_received: "💰", referral_reward: "🤝", agent_commission_earned: "💼",
+    win: "🏆", deposit_received: "📥", withdrawal_received: "⏳", low_balance: "👛", bonus_granted: "🎁", agent_topup_received: "💰", referral_reward: "🤝", agent_commission_earned: "💼",
   };
 
   async function api(path, options = {}) {
@@ -43,7 +43,10 @@
 
   async function refreshCount() {
     try {
-      const { unread_count } = await api(`/api/notifications/unread-count?player_id=${encodeURIComponent(playerId)}`);
+      // pollNotice (melbete-core.js) returns the unread count and shows a banner for a fresh message.
+      const unread_count = typeof pollNotice === "function"
+        ? await pollNotice(playerId, () => openSheet())
+        : (await api(`/api/notifications/unread-count?player_id=${encodeURIComponent(playerId)}`)).unread_count;
       setBadge(unread_count);
     } catch { /* offline or not logged in yet: try again next tick */ }
   }

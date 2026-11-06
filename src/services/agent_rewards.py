@@ -172,6 +172,8 @@ class AgentRewardService:
         if agent is None or agent.status != "active":
             return None
         await self.refresh_tier(agent)
+        if not agent.rewards_enabled:
+            return None   # admin switched this agent's rewards off (commission on top-ups is unaffected)
         settings = await self.agents.get_reward_settings()
         if not settings["enabled"] or settings["new_player_bounty"] <= 0:
             return None
@@ -243,8 +245,8 @@ class AgentRewardService:
     async def _settle(self, rw: dict, settings: dict, now: datetime) -> str:
         try:
             agent = await self.agents.get(rw["agent_id"])
-            if agent is None or agent.status != "active":
-                return "skipped"
+            if agent is None or agent.status != "active" or not agent.rewards_enabled:
+                return "skipped"   # stays on hold; paid later if the agent is re-enabled
             reason = await self._disqualify(rw, agent, settings)
             if reason:
                 await self.agents.cancel_reward(rw["id"], reason)

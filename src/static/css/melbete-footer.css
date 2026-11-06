@@ -119,3 +119,22 @@ body:has(#room-footer) .cashback-fab { bottom: calc(6.6rem + env(safe-area-inset
 .promo-state { font-size: .68rem; font-weight: 700; padding: .3rem .6rem; border-radius: 999px; white-space: nowrap; background: rgb(255 255 255 / .08); color: var(--melbete-ink-2, #B3AEA2); }
 .promo-state.done { background: rgb(34 197 94 / .18); color: #86EFAC; }
 .promo-state.soon { background: rgb(255 201 51 / .14); color: #FFC933; }
+
+/* ---- Daily streak chip, tucked into the top-left corner of the Promos tab ----------- */
+.tab-streak {
+  position: absolute; top: 3px; left: 2px; display: inline-flex; align-items: center; height: 15px; padding: 0 5px;
+  border-radius: 8px; background: rgb(255 201 51 / .16); border: 1px solid rgb(255 201 51 / .4);
+  color: #FFC933; font: 800 .58rem/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap;
+  pointer-events: none;
+}
+.tab-streak.off { opacity: .55; filter: grayscale(.6); }
+.tab-streak.hidden { display: none; }
+
+/* Withdrawable balance on the Withdraw tab (top-right corner) */
+.hub-tabbar .hub-tab-btn { position: relative; }
+.tab-withdrawable {
+  position: absolute; top: 3px; right: 1px; display: inline-flex; align-items: center; height: 15px; padding: 0 5px;
+  border-radius: 8px; background: rgb(34 197 94 / .16); border: 1px solid rgb(34 197 94 / .5);
+  color: #86EFAC; font: 800 .58rem/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
+}
+.tab-withdrawable.off { opacity: .5; }

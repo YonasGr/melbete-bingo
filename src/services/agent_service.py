@@ -28,6 +28,10 @@ MIN_CASHOUT = 10  # ETB of commission per cash-out
 MAX_FLOAT_ADJUSTMENT = 1_000_000  # ETB per single adjustment - guards against a typo'd extra zero
 
 
+MAX_APPLICATION_NOTE = 300
+DEFAULT_APPLICATION_COMMISSION_PERCENT = 3   # the admin can change it when approving
+
+
 class AgentError(Exception):
     """Base class; `message` is safe to show to the admin."""
 
@@ -97,6 +101,89 @@ class AgentService:
             raise AgentAlreadyExistsError("This player is already an agent")
         logger.warning("Admin %s created agent %s for player %s (%d bps)", admin_id, agent.id, player.id, bps)
         return agent
+
+    async def update_commission(self, admin_id: str, agent_id: str, commission_percent) -> Agent:
+        """Change the agent's BASE rate. The paid rate stays max(base, tier), so tiers still apply on top."""
+        bps = commission_percent_to_bps(commission_percent)
+        agent = await self.agents.set_commission(agent_id, bps)
+        if agent is None:
+            raise AgentNotFoundError("Agent not found")
+        logger.warning("Admin %s set commission of agent %s to %d bps", admin_id, agent_id, bps)
+        return agent
+
+    async def set_rewards_enabled(self, admin_id: str, agent_id: str, enabled) -> Agent:
+        """Per-agent switch for new-player / retention rewards (the commission on top-ups is unaffected)."""
+        if not isinstance(enabled, bool):
+            raise InvalidAgentInputError("enabled must be true or false")
+        agent = await self.agents.set_rewards_enabled(agent_id, enabled)
+        if agent is None:
+            raise AgentNotFoundError("Agent not found")
+        logger.warning("Admin %s set rewards_enabled=%s for agent %s", admin_id, enabled, agent_id)
+        return agent
+
+    # ------------------------------------------------------------------
+    # Registration requests: a player applies, an admin approves (-> becomes an agent) or rejects
+    # ------------------------------------------------------------------
+
+    async def apply(self, player_id: str, note: str = "") -> dict:
+        note = str(note or "").strip()
+        if len(note) > MAX_APPLICATION_NOTE:
+            raise InvalidAgentInputError(f"Please keep the note under {MAX_APPLICATION_NOTE} characters")
+        player = await self.players.get_by_id(player_id)
+        if player is None:
+            raise AgentNotFoundError("Player not found")
+        if getattr(player, "is_bot", False) or getattr(player, "is_banned", False):
+            raise InvalidAgentInputError("This account cannot become an agent")
+        if await self.agents.get_by_player(player_id):
+            raise AgentAlreadyExistsError("You are already an agent")
+        app = await self.agents.create_application(player_id, note)
+        if app is None:
+            raise InvalidAgentInputError("You already have a request waiting for review")
+        logger.info("Player %s applied to become an agent", player_id)
+        return app
+
+    async def my_application(self, player_id: str) -> Optional[dict]:
+        return await self.agents.latest_application(player_id)
+
+    async def list_applications(self, status: Optional[str] = "pending") -> list[dict]:
+        if status not in (None, "pending", "approved", "rejected"):
+            raise InvalidAgentInputError("status must be pending, approved or rejected")
+        return await self.agents.list_applications(status)
+
+    async def review_application(self, admin_id: str, application_id: str, approve: bool,
+                                 commission_percent=None, note: str = "") -> dict:
+        existing = await self.agents.get_application(application_id)
+        if existing is None:
+            raise AgentNotFoundError("Request not found")
+        note = str(note or "").strip()[:200]
+        bps = None
+        if approve:
+            bps = commission_percent_to_bps(DEFAULT_APPLICATION_COMMISSION_PERCENT if commission_percent in (None, "") else commission_percent)
+            player = await self.players.get_by_id(existing["player_id"])
+            if player is None or getattr(player, "is_bot", False) or getattr(player, "is_banned", False):
+                raise InvalidAgentInputError("This player can no longer become an agent")
+        claimed = await self.agents.resolve_application(application_id, "approved" if approve else "rejected", admin_id, note)
+        if claimed is None:
+            raise InvalidAgentInputError("This request was already reviewed")
+        agent = None
+        if approve:
+            try:
+                agent = await self.agents.create(existing["player_id"], bps, admin_id)
+            except AgentAlreadyExists:
+                agent = await self.agents.get_by_player(existing["player_id"])
+        try:
+            from src.services import player_notifications as pn
+
+            if approve:
+                pn.schedule_notify(existing["player_id"], "agent_application_approved", {"percent": bps / 100},
+                                   dedupe_key=f"agent_application:{application_id}")
+            else:
+                pn.schedule_notify(existing["player_id"], "agent_application_rejected", {"note": note},
+                                   dedupe_key=f"agent_application:{application_id}")
+        except Exception:  # noqa: BLE001 - a notification problem must not undo the decision
+            logger.exception("Could not notify %s about their agent request", existing["player_id"])
+        logger.warning("Admin %s %s agent request %s", admin_id, "approved" if approve else "rejected", application_id)
+        return {"application": claimed, "agent": agent}
 
     async def list_agents(self) -> list[Agent]:
         return await self.agents.list_all()

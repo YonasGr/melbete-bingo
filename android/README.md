@@ -6,7 +6,7 @@ them install Telegram if it is missing.
 
 **Why it opens Telegram instead of showing the game itself:** the game is a Telegram Mini App. Every wallet and
 game action is verified with Telegram's signed login data, and browser login was deliberately switched off
-after the security incident (see `INCIDENT_RESPONSE.md`). A web view inside this app has no Telegram login, so
+after the security incident (see `docs/security.md`). A web view inside this app has no Telegram login, so
 deposits, withdrawals and play would all be refused. A fully standalone app needs a new, secure sign-in
 (see "Standalone version" below) and is a separate piece of work.
 

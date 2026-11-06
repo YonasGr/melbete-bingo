@@ -3,7 +3,7 @@ Shared admin-notification pipeline.
 
 The bot process and the API process run as separate containers, so they
 can't share in-memory state - but they share the same Telegram bot token
-and the same Firestore-backed services. This module is the SINGLE place
+and the same Postgres-backed services. This module is the SINGLE place
 that knows how to alert admins about a pending deposit or withdrawal,
 using a lightweight `telegram.Bot` client (not the polling `Application`)
 that either process can call directly.
@@ -254,3 +254,27 @@ async def get_bot_username() -> str:
         except Exception:  # noqa: BLE001
             logger.exception("Failed to fetch bot username dynamically")
     return _bot_username or ""
+
+
+async def check_channel_membership(channel_username: str, telegram_id: str) -> tuple[str, str]:
+    """Ask Telegram (never the client) whether this user is in the channel.
+
+    Returns ("member" | "not_member" | "unverifiable", detail). Only "member" may credit points. The bot must be
+    an administrator of the channel to see its members; any error - bot not in the channel, channel not found,
+    network problem - is "unverifiable", so a misconfiguration can never hand out points.
+    """
+    bot = await _get_bot()
+    if bot is None:
+        return "unverifiable", "bot is not configured"
+    try:
+        member = await bot.get_chat_member(chat_id=f"@{channel_username.lstrip('@')}", user_id=int(telegram_id))
+    except Exception as e:  # noqa: BLE001 - every failure means "could not verify"
+        text = str(e)
+        logger.warning("Channel membership check for @%s failed: %s", channel_username, text)
+        return "unverifiable", text[:200]
+    status = getattr(member, "status", "")
+    if status in ("creator", "administrator", "member"):
+        return "member", status
+    if status == "restricted":
+        return ("member", status) if getattr(member, "is_member", False) else ("not_member", status)
+    return "not_member", status or "unknown"

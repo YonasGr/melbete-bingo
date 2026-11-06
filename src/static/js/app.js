@@ -11,11 +11,8 @@
 // net, so called numbers / taken cartelas / round state always catch up
 // even if a push message was missed - no manual reload required.
 
-const tg = window.Telegram?.WebApp;
-tg?.ready();
-tg?.expand();
-
-const API = "";
+// `tg`, `API`, initIdentity(), toast(), api(), idemKey() come from
+// melbete-core.js, which bingo.html loads first.
 const state = {
   playerId: null,
   telegramId: null,
@@ -28,11 +25,6 @@ const state = {
   autoBingo: true, // always on - there is no manual mode
   lastCalledCount: -1, // tracks how many called numbers were last rendered — avoids
                        // redundant DOM rebuilds when poll and WS both fire close together
-  paymentMethods: [],
-  withdrawAccounts: {},
-  selectedDepositMethod: null,
-  selectedWithdrawMethod: null,
-  depositScreenshotDataUrl: null,
   countdownInterval: null,
   countdownRefreshTimer: null,
   countdownRemaining: null,
@@ -48,12 +40,6 @@ const state = {
   // the UI reflecting it instantly instead of waiting for a rejected
   // request to bounce back.
   lobbyLocked: false,
-  supportContact: "@melbete_support_1",
-  // Set once a web-only (outside Telegram) session has been linked to a
-  // real Telegram account (see initIdentity() and the Link Telegram
-  // Account flow) - sent instead of Telegram's own initData, which a
-  // bare browser never has.
-  webSessionToken: null,
 };
 
 // ---------------------------------------------------------------------
@@ -102,21 +88,6 @@ function formatCall(number) {
 // ---------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------
-function initIdentity() {
-  const user = tg?.initDataUnsafe?.user;
-  if (user) {
-    state.telegramId = String(user.id);
-    state.playerId = `tg_${user.id}`;
-    state.displayName = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || "Player";
-    return;
-  }
-
-  throw new Error("For your security, this game must be opened from the official Telegram bot.");
-}
-
-// ---------------------------------------------------------------------
-// View + toast helpers
-// ---------------------------------------------------------------------
 function showView(id) {
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   document.getElementById(id)?.classList.add("active");
@@ -141,48 +112,6 @@ function updateRoomHeader(trackId) {
   if (subtitle) subtitle.textContent = meta?.subtitle || "Game room";
 }
 
-function toast(msg, kind = "info") {
-  const el = document.getElementById("toast");
-  el.textContent = msg;
-  el.className = `toast ${kind}`;
-  el.classList.remove("hidden");
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.add("hidden"), 3500);
-}
-
-async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  // Telegram's own signed initData string is the only accepted player
-  // credential; long-lived browser bearer tokens are disabled.
-  if (tg?.initData) headers["X-Telegram-Init-Data"] = tg.initData;
-  const res = await fetch(`${API}${path}`, { ...options, headers });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(data.detail || `Request failed (${res.status})`);
-    err.status = res.status;
-    throw err;
-  }
-  return data;
-}
-
-// One Idempotency-Key per user action, reused if the same action is retried (double tap,
-// flaky network) so the server never moves money twice. Cleared once the action succeeds
-// or is cleanly rejected, so the next attempt gets a fresh key.
-const _idemKeys = {};
-function idemKey(scope) {
-  if (!_idemKeys[scope]) _idemKeys[scope] = `${scope}-${crypto.randomUUID()}`;
-  return _idemKeys[scope];
-}
-function clearIdemKey(scope) { delete _idemKeys[scope]; }
-
-// A 403 from an identity-checked endpoint means the server rejected this
-// session's Telegram initData (missing/stale/invalid) - the one case
-// where "please reopen the app" is the actually-correct, actionable
-// message, rather than a generic network-error toast.
-function isIdentityError(e) {
-  return e && e.status === 403;
-}
-
 // ---------------------------------------------------------------------
 // Wallet / top bar
 // ---------------------------------------------------------------------
@@ -201,7 +130,8 @@ function updateRoomChip(balance) {
 async function refreshFooterBadges() {
   if (!state.playerId || document.hidden) return;
   try {
-    const { unread_count } = await api(`/api/notifications/unread-count?player_id=${encodeURIComponent(state.playerId)}`);
+    // pollNotice (melbete-core.js) also shows an in-app banner for a fresh message; tapping it opens the inbox.
+    const unread_count = await pollNotice(state.playerId, () => { window.location.href = "/app#profile"; });
     const b = document.getElementById("rf-badge-profile");
     if (b) { b.textContent = unread_count > 99 ? "99+" : String(unread_count); b.classList.toggle("hidden", !(unread_count > 0)); }
   } catch (e) { /* badge just stays as it was */ }
@@ -251,11 +181,6 @@ async function refreshWallet() {
       bonusPill.classList.add("hidden");
     }
   } catch (e) { /* non-fatal - top bar just won't update this tick */ }
-}
-
-async function loadPaymentMethods() {
-  const data = await api("/api/payment-methods");
-  state.paymentMethods = data.methods;
 }
 
 async function loadPrefs() {
@@ -478,7 +403,7 @@ function setLobbyLocked(locked) {
 }
 
 function lobbyStatusText(room) {
-  const min = room?.min_cartelas_to_start || 3;
+  const min = room?.min_cartelas_to_start || 2;
   const taken = room?.taken_cartelas?.length || 0;
   if (room?.countdown_started_at) return `${taken} cartela(s) reserved - the round starts when the countdown ends.`;
   const need = Math.max(min - taken, 0);
@@ -1012,9 +937,10 @@ function renderCalledNumbers(numbers) {
   const latestText = latestNumber != null ? String(latestNumber) : "-";
   if (numberEl.textContent !== latestText) {
     letterEl.textContent = latestNumber != null ? bingoLetterFor(latestNumber) : "";
+    // The ball roll must always finish well before the next call: 40% of the draw interval, between 0.35s and 0.8s.
+    const every = Number(state.room?.draw_interval) || 4;
+    document.documentElement.style.setProperty("--melbete-roll", `${Math.round(Math.min(800, Math.max(350, every * 400)))}ms`);
     numberEl.textContent = latestText;
-    current.classList.add("pulse");
-    setTimeout(() => current.classList.remove("pulse"), 200);
   }
   // Only rebuild the history chips if the count actually changed — avoids
   // unnecessary DOM churn on concurrent poll + WS renders of the same numbers.
@@ -1150,9 +1076,10 @@ function connectWebSocket() {
       handleWsMessage(JSON.parse(evt.data));
     } catch (e) { /* ignore malformed frame */ }
   };
+  ws.onopen = () => { window.MelbeteNet?.socket(true); };
   ws.onclose = () => {
     clearInterval(state.wsHeartbeatTimer);
-    if (state.ws === ws) setTimeout(() => connectWebSocket(), 2000);
+    if (state.ws === ws) { window.MelbeteNet?.socket(false); setTimeout(() => connectWebSocket(), 2000); }
   };
   ws.onerror = () => ws.close();
 
@@ -1221,6 +1148,7 @@ function handleWsMessage(msg) {
       break;
     case "number_drawn":
       if (state.room && !state.room.called_numbers.includes(msg.number)) {
+        if (state.room.called_numbers.length === 0) window.MelbeteCue?.firstNumber();
         state.room.called_numbers = [...state.room.called_numbers, msg.number];
         if (document.getElementById("game-view").classList.contains("active")) {
           renderCalledNumbers(state.room.called_numbers);
@@ -1243,6 +1171,7 @@ function handleWsMessage(msg) {
       safeRefreshRoom();
       break;
     case "game_started":
+      window.MelbeteCue?.start();
       document.getElementById("countdown-banner").classList.add("hidden");
       safeRefreshRoom();
       break;
@@ -1516,10 +1445,17 @@ function startCountdownBanner(seconds) {
   const banner = document.getElementById("countdown-banner");
   banner.classList.remove("hidden");
   document.getElementById("players-joined-count").textContent = state.room?.taken_cartelas?.length || 0;
+  let lastCueSecond = null;
   const tick = () => {
     const remainingMs = Math.max(deadline - Date.now(), 0);
     // ceil avoids showing 0 before the actual server deadline.
-    document.getElementById("countdown-seconds").textContent = Math.ceil(remainingMs / 1000);
+    const secondsLeft = Math.ceil(remainingMs / 1000);
+    document.getElementById("countdown-seconds").textContent = secondsLeft;
+    // Soft tick (sound + haptic) for the last 5 seconds, once per second, so nobody misses the start.
+    if (remainingMs > 0 && secondsLeft <= 5 && secondsLeft !== lastCueSecond) {
+      lastCueSecond = secondsLeft;
+      window.MelbeteCue?.tick(secondsLeft);
+    }
     setLobbyLocked(remainingMs <= lockThresholdMs);
     if (remainingMs > 0) return;
     clearInterval(state.countdownInterval);
@@ -1557,743 +1493,6 @@ function showCountdownFromServer() {
 }
 
 // ---------------------------------------------------------------------
-// Deposit modal
-// ---------------------------------------------------------------------
-function openModal(id) { document.getElementById(id).classList.remove("hidden"); }
-function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
-
-/** Logo for a payment method, matched by key/name. Falls back to a plain
- * emoji badge for any method that isn't Telebirr / CBE Birr. */
-function getMethodLogo(method) {
-  const key = (method?.key || "").toLowerCase();
-  const name = (method?.name || "").toLowerCase();
-  if (key.includes("tele") || name.includes("tele")) return "/static/img/payment/telebirr.png";
-  if (key.includes("cbe") || name.includes("cbe")) return "/static/img/payment/cbebirr.png";
-  return null;
-}
-
-/** Builds a method-card button (logo + name) used by both the deposit and
- * withdraw method pickers. */
-function buildMethodCard(method, label, onSelect) {
-  const btn = document.createElement("button");
-  btn.className = "method-card";
-  btn.type = "button";
-
-  const logoUrl = getMethodLogo(method);
-  if (logoUrl) {
-    const img = document.createElement("img");
-    img.className = "method-card-logo";
-    img.src = logoUrl;
-    img.alt = label;
-    btn.appendChild(img);
-  } else {
-    const placeholder = document.createElement("span");
-    placeholder.className = "method-card-logo placeholder";
-    placeholder.textContent = "💳";
-    btn.appendChild(placeholder);
-  }
-
-  const nameSpan = document.createElement("span");
-  nameSpan.textContent = label;
-  btn.appendChild(nameSpan);
-
-  const check = document.createElement("span");
-  check.className = "method-card-check";
-  check.textContent = "✓";
-  btn.appendChild(check);
-
-  btn.addEventListener("click", onSelect);
-  return btn;
-}
-
-async function openDepositModal() {
-  try {
-    await loadPaymentMethods();
-  } catch (e) {
-    toast("Couldn't load payment methods - try again.", "error");
-    return;
-  }
-  const list = document.getElementById("deposit-methods");
-  list.innerHTML = "";
-  const methods = state.paymentMethods.filter((m) => m.supports_deposit);
-
-  if (methods.length === 0) {
-    const p = document.createElement("p");
-    p.className = "muted small";
-    p.textContent = "No payment methods are configured yet - please contact support.";
-    list.appendChild(p);
-  } else {
-    const groups = {};
-    methods.forEach(m => {
-      if (!groups[m.name]) groups[m.name] = [];
-      groups[m.name].push(m);
-    });
-
-    Object.keys(groups).sort().forEach(name => {
-      const group = groups[name];
-      const btn = buildMethodCard(group[0], name, () => {
-        document.querySelectorAll("#deposit-methods .method-card").forEach(b => b.classList.remove("selected"));
-        btn.classList.add("selected");
-        if (group.length === 1) {
-          selectDepositMethod(group[0].key);
-        } else {
-          showDepositAccountSelector(name, group);
-        }
-      });
-      list.appendChild(btn);
-    });
-  }
-  document.getElementById("deposit-account-info").classList.add("hidden");
-  document.getElementById("deposit-amount").value = "";
-  if (document.getElementById("deposit-sms-text")) {
-    const smsEl = document.getElementById("deposit-sms-text");
-    smsEl.value = "";
-    autoGrowTextarea(smsEl);
-  }
-  document.getElementById("deposit-screenshot").value = "";
-  document.getElementById("deposit-screenshot-preview").classList.add("hidden");
-  state.depositScreenshotDataUrl = null;
-  try {
-    const limits = await api(`/api/wallet/${state.playerId}/limits`);
-    document.getElementById("deposit-limits").textContent = `Min ${limits.min_deposit} ETB - Max ${limits.max_deposit} ETB`;
-  } catch (e) { /* non-fatal */ }
-  openModal("deposit-modal");
-}
-
-function selectDepositMethod(key) {
-  state.selectedDepositMethod = key;
-  const method = state.paymentMethods.find((m) => m.key === key);
-  const box = document.getElementById("deposit-account-info");
-  if (method) {
-    box.innerHTML = "";
-
-    const logoUrl = getMethodLogo(method);
-    if (logoUrl) {
-      const img = document.createElement("img");
-      img.className = "account-info-logo";
-      img.src = logoUrl;
-      img.alt = method.name;
-      box.appendChild(img);
-    }
-
-    const body = document.createElement("div");
-    body.className = "account-info-body";
-
-    const nameStrong = document.createElement("span");
-    nameStrong.className = "account-info-name";
-    nameStrong.textContent = method.name;
-    body.appendChild(nameStrong);
-
-    const row1 = document.createElement("div");
-    row1.className = "account-info-row";
-    row1.appendChild(document.createTextNode(`Name: ${method.account_holder || "N/A"}`));
-    body.appendChild(row1);
-
-    const row2 = document.createElement("div");
-    row2.className = "account-info-row account-number-row";
-    row2.appendChild(melbeteAccountCopy(method.account_info, "Copy", "Copied"));
-    body.appendChild(row2);
-
-    if (method.instructions) {
-      const instrSpan = document.createElement("div");
-      instrSpan.className = "muted small";
-      instrSpan.style.marginTop = "4px";
-      instrSpan.textContent = method.instructions;
-      body.appendChild(instrSpan);
-    }
-
-    box.appendChild(body);
-    box.classList.remove("hidden");
-    wireCopyableElements(box);
-  }
-}
-
-/** Any element with data-copy="<value>" becomes tap-to-copy with a
- * "Copied!" confirmation toast - used for every payment account number
- * shown anywhere in the app. */
-function wireCopyableElements(root) {
-  root.querySelectorAll("[data-copy]").forEach((el) => {
-    el.addEventListener("click", async () => {
-      const value = el.dataset.copy;
-      try {
-        await navigator.clipboard.writeText(value);
-      } catch (e) {
-        // Clipboard API unavailable (older in-app browsers) - fall back
-        // to a temporary selectable text field.
-        const tmp = document.createElement("textarea");
-        tmp.value = value;
-        tmp.style.position = "fixed";
-        tmp.style.opacity = "0";
-        document.body.appendChild(tmp);
-        tmp.select();
-        try { document.execCommand("copy"); } catch (e2) { /* give up silently */ }
-        document.body.removeChild(tmp);
-      }
-      toast("Copied!", "success");
-    });
-  });
-}
-
-function wireDepositScreenshotInput() {
-  document.getElementById("deposit-screenshot")?.addEventListener("change", (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 6 * 1024 * 1024) {
-      toast("Screenshot is too large (max 6MB).", "error");
-      e.target.value = "";
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      state.depositScreenshotDataUrl = reader.result;
-      const preview = document.getElementById("deposit-screenshot-preview");
-      preview.src = reader.result;
-      preview.classList.remove("hidden");
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-/** Grows a textarea's height to fit its content instead of scrolling
- * internally - used for the deposit SMS box since pasted SMS text
- * varies a lot in length. */
-function autoGrowTextarea(el) {
-  el.style.height = "auto";
-  el.style.height = `${el.scrollHeight}px`;
-}
-
-function wireAutoGrowTextareas() {
-  const el = document.getElementById("deposit-sms-text");
-  if (!el) return;
-  const grow = () => autoGrowTextarea(el);
-  el.addEventListener("input", grow);
-  el.addEventListener("paste", () => setTimeout(grow, 0));
-  // Reset height whenever the deposit modal opens so it doesn't carry
-  // over a tall size from a previous submission.
-  grow();
-}
-
-async function submitDeposit() {
-  const amount = Number(document.getElementById("deposit-amount").value);
-  const smsText = document.getElementById("deposit-sms-text")?.value?.trim();
-
-  if (!state.selectedDepositMethod) return toast("Choose a payment method first", "error");
-  if (!amount) return toast("Enter an amount", "error");
-  if (!smsText) return toast("Please paste the transaction SMS message - it's required.", "error");
-  if (!state.depositScreenshotDataUrl) {
-    return toast("Please attach a screenshot of your transaction - it's required to submit a deposit.", "error");
-  }
-  const btn = document.getElementById("deposit-submit-btn");
-  btn.disabled = true;
-  try {
-    const res = await api(`/api/wallet/${state.playerId}/deposit`, {
-      method: "POST",
-      headers: { "Idempotency-Key": idemKey("deposit") },
-      body: JSON.stringify({
-        amount,
-        payment_method: state.selectedDepositMethod,
-        sms_text: smsText,
-        screenshot_base64: state.depositScreenshotDataUrl,
-      }),
-    });
-    clearIdemKey("deposit");
-    toast(res.message, "success");
-    closeModal("deposit-modal");
-  } catch (e) {
-    toast(e.message, "error");
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// ---------------------------------------------------------------------
-// Withdraw modal
-// ---------------------------------------------------------------------
-async function openWithdrawModal() {
-  try {
-    await loadPaymentMethods();
-  } catch (e) {
-    toast("Couldn't load payment methods - try again.", "error");
-    return;
-  }
-  try {
-    const res = await api(`/api/wallet/${state.playerId}/withdrawal-accounts`);
-    state.withdrawAccounts = res.accounts || {};
-  } catch (e) {
-    state.withdrawAccounts = {};
-  }
-  const list = document.getElementById("withdraw-methods");
-  list.innerHTML = "";
-  const methods = state.paymentMethods.filter((m) => m.supports_withdrawal);
-
-  if (methods.length === 0) {
-    const p = document.createElement("p");
-    p.className = "muted small";
-    p.textContent = "No withdrawal methods are configured yet - please contact support.";
-    list.appendChild(p);
-  } else {
-    methods.forEach(m => {
-      const btn = buildMethodCard(m, m.name, () => {
-        document.querySelectorAll("#withdraw-methods .method-card").forEach(b => b.classList.remove("selected"));
-        btn.classList.add("selected");
-        selectWithdrawMethod(m.key);
-      });
-      list.appendChild(btn);
-    });
-  }
-  document.getElementById("withdraw-address-step").classList.remove("hidden");
-  document.getElementById("withdraw-form-step").classList.add("hidden");
-  try {
-    const [limits, wallet] = await Promise.all([
-      api(`/api/wallet/${state.playerId}/limits`),
-      api(`/api/wallet/${state.playerId}`),
-    ]);
-    document.getElementById("withdraw-limits").textContent =
-      `Withdrawable (winnings only): ${wallet.won_balance} ETB · Min ${limits.min_withdrawal} ETB · Max ${limits.max_withdrawal} ETB. ` +
-      `Deposited funds are playable but not withdrawable.`;
-  } catch (e) { /* non-fatal */ }
-  openModal("withdraw-modal");
-}
-
-function showDepositAccountSelector(name, accounts) {
-  const box = document.getElementById("deposit-account-info");
-  box.innerHTML = "";
-  box.classList.remove("hidden");
-  box.style.display = "block";
-
-  const title = document.createElement("p");
-  title.className = "small muted";
-  title.style.marginBottom = "8px";
-  title.textContent = `Choose which ${name} account to pay:`;
-  box.appendChild(title);
-
-  const grid = document.createElement("div");
-  grid.style.display = "grid";
-  grid.style.gap = "8px";
-
-  accounts.forEach(m => {
-    const btn = document.createElement("button");
-    btn.className = "secondary-btn";
-    btn.style.margin = "0";
-    btn.style.fontSize = "0.85rem";
-    btn.style.padding = "10px";
-    btn.style.textAlign = "left";
-    btn.textContent = `${m.account_holder} (${m.account_info})`;
-    btn.addEventListener("click", () => {
-      box.style.display = "flex";
-      selectDepositMethod(m.key);
-    });
-    grid.appendChild(btn);
-  });
-  box.appendChild(grid);
-}
-
-function selectWithdrawMethod(key) {
-  state.selectedWithdrawMethod = key;
-  const method = state.paymentMethods.find((m) => m.key === key);
-  document.getElementById("withdraw-method-name").textContent = method?.name || "payment";
-  const existing = state.withdrawAccounts[key];
-  document.getElementById("withdraw-address").value = existing || "";
-  document.getElementById("withdraw-form-step").classList.toggle("hidden", !existing);
-}
-
-async function saveWithdrawAddress() {
-  if (!state.selectedWithdrawMethod) return toast("Choose a method first", "error");
-  const address = document.getElementById("withdraw-address").value.trim();
-  if (!address) return toast("Enter your account number", "error");
-  try {
-    await api(`/api/wallet/${state.playerId}/withdrawal-accounts`, {
-      method: "POST",
-      body: JSON.stringify({ method_key: state.selectedWithdrawMethod, address }),
-    });
-    state.withdrawAccounts[state.selectedWithdrawMethod] = address;
-    document.getElementById("withdraw-form-step").classList.remove("hidden");
-    toast("Address saved", "success");
-  } catch (e) {
-    toast(e.message, "error");
-  }
-}
-
-async function submitWithdrawal() {
-  const amount = Number(document.getElementById("withdraw-amount").value);
-  const legalName = document.getElementById("withdraw-legal-name").value.trim();
-  if (!state.selectedWithdrawMethod) return toast("Choose a method first", "error");
-  if (!amount) return toast("Enter an amount", "error");
-  if (!legalName) return toast("Enter your full legal name", "error");
-  try {
-    const res = await api(`/api/wallet/${state.playerId}/withdraw`, {
-      method: "POST",
-      headers: { "Idempotency-Key": idemKey("withdraw") },
-      body: JSON.stringify({ amount, payment_method: state.selectedWithdrawMethod, legal_name: legalName }),
-    });
-    clearIdemKey("withdraw");
-    toast(res.message, "success");
-    closeModal("withdraw-modal");
-    refreshWallet();
-  } catch (e) {
-    // A clean rejection (4xx) means nothing moved: next attempt may use a new key.
-    if (e.status >= 400 && e.status < 500 && e.status !== 409 && e.status !== 429) clearIdemKey("withdraw");
-    toast(e.message, "error");
-  }
-}
-
-// ---------------------------------------------------------------------
-// History modal
-// ---------------------------------------------------------------------
-async function openHistoryModal() {
-  const res = await api(`/api/wallet/${state.playerId}/transactions`);
-  const list = document.getElementById("history-list");
-  list.innerHTML = "";
-  if (res.transactions.length === 0) {
-    const p = document.createElement("p");
-    p.className = "muted";
-    p.textContent = "No transactions yet.";
-    list.appendChild(p);
-  } else {
-    const frag = document.createDocumentFragment();
-    res.transactions.forEach((t) => {
-      const row = document.createElement("div");
-      row.className = "history-row";
-
-      const type = document.createElement("span");
-      type.textContent = t.type.replace(/_/g, " ");
-
-      const amt = document.createElement("span");
-      amt.className = t.amount >= 0 ? "positive" : "negative";
-      amt.textContent = `${t.amount >= 0 ? "+" : ""}${t.amount} ETB`;
-
-      const status = document.createElement("span");
-      status.className = "muted small";
-      status.textContent = t.status;
-
-      row.append(type, amt, status);
-      frag.appendChild(row);
-    });
-    list.appendChild(frag);
-  }
-  openModal("history-modal");
-}
-
-// ---------------------------------------------------------------------
-// Profile drawer
-// ---------------------------------------------------------------------
-function getSupportLink() {
-  const contact = state.supportContact || "@melbete_support_1";
-  if (contact.startsWith("@")) {
-    return `https://t.me/${contact.substring(1)}`;
-  }
-  if (contact.startsWith("http://") || contact.startsWith("https://")) {
-    return contact;
-  }
-  return `https://t.me/${contact}`;
-}
-
-function openProfileDrawer() {
-  document.getElementById("profile-backdrop").classList.remove("hidden");
-  document.getElementById("profile-drawer").classList.add("open");
-  updateLinkTelegramVisibility();
-  populateProfileDrawer();
-}
-
-function closeProfileDrawer() {
-  document.getElementById("profile-backdrop").classList.add("hidden");
-  document.getElementById("profile-drawer").classList.remove("open");
-}
-
-// ---------------------------------------------------------------------
-// Link Telegram Account (for players using the web version outside
-// Telegram) - see /api/link/* in the backend and _complete_account_link
-// in telegram_bot.py for the other half of this flow.
-// ---------------------------------------------------------------------
-function updateLinkTelegramVisibility() {
-  const row = document.getElementById("link-telegram-row");
-  const linkedRow = document.getElementById("link-telegram-linked-row");
-  if (!row || !linkedRow) return;
-
-  if (tg?.initData) {
-    // Real Telegram session - inherently already "linked", nothing to show.
-    row.classList.add("hidden");
-    linkedRow.classList.add("hidden");
-    return;
-  }
-
-  if (state.playerId?.startsWith("tg_")) {
-    row.classList.add("hidden");
-    linkedRow.classList.remove("hidden");
-  } else {
-    row.classList.remove("hidden");
-    linkedRow.classList.add("hidden");
-  }
-}
-
-let linkPollTimer = null;
-
-function openLinkTelegramModal() {
-  // Always reset to the starting step when opened.
-  document.getElementById("link-telegram-start").classList.remove("hidden");
-  document.getElementById("link-telegram-pending").classList.add("hidden");
-  document.getElementById("link-telegram-success").classList.add("hidden");
-  const statusEl = document.getElementById("link-telegram-status");
-  statusEl.innerHTML = '<span class="link-telegram-spinner"></span> Waiting for confirmation...';
-  clearInterval(linkPollTimer);
-  openModal("link-telegram-modal");
-}
-
-async function generateLinkCode() {
-  const btn = document.getElementById("link-telegram-generate-btn");
-  btn.disabled = true;
-  btn.textContent = "Generating...";
-  try {
-    const res = await api("/api/link/create", {
-      method: "POST",
-      body: JSON.stringify({ player_id: state.playerId }),
-    });
-    document.getElementById("link-telegram-code").textContent = res.code;
-
-    const openBtn = document.getElementById("link-telegram-open-btn");
-    const hint = document.getElementById("link-telegram-manual-hint");
-    if (res.deep_link) {
-      openBtn.href = res.deep_link;
-      openBtn.classList.remove("hidden");
-      hint.textContent = `Or send /link ${res.code} to the bot manually.`;
-    } else {
-      openBtn.classList.add("hidden");
-      hint.textContent = `Open our Telegram bot and send: /link ${res.code}`;
-    }
-
-    document.getElementById("link-telegram-start").classList.add("hidden");
-    document.getElementById("link-telegram-pending").classList.remove("hidden");
-    startLinkPolling(res.code);
-  } catch (e) {
-    toast(e.message || "Couldn't generate a code - please try again.", "error");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Generate Code";
-  }
-}
-
-function startLinkPolling(code) {
-  clearInterval(linkPollTimer);
-  linkPollTimer = setInterval(async () => {
-    if (document.getElementById("link-telegram-modal").classList.contains("hidden")) {
-      clearInterval(linkPollTimer);
-      return;
-    }
-    let res;
-    try {
-      res = await api(`/api/link/status/${code}`);
-    } catch (e) {
-      return; // transient network hiccup - next tick retries
-    }
-    if (res.status === "linked") {
-      clearInterval(linkPollTimer);
-      await completeAccountLink(res);
-    } else if (res.status === "expired") {
-      clearInterval(linkPollTimer);
-      document.getElementById("link-telegram-status").innerHTML =
-        "⚠️ Code expired - close this and generate a new one.";
-    }
-  }, 3000);
-}
-
-async function completeAccountLink(res) {
-  localStorage.setItem("melbete_bingo_linked_player_id", res.player_id);
-  localStorage.setItem("melbete_bingo_web_session_token", res.session_token);
-  state.playerId = res.player_id;
-  state.webSessionToken = res.session_token;
-  state.telegramId = res.player_id.replace(/^tg_/, "");
-
-  document.getElementById("link-telegram-pending").classList.add("hidden");
-  document.getElementById("link-telegram-success").classList.remove("hidden");
-  updateLinkTelegramVisibility();
-
-  // Everything from here on (wallet, session, profile fields) needs to
-  // reflect the newly-linked identity, not the old anonymous one.
-  await Promise.all([refreshWallet(), bootstrapSession()]);
-  populateProfileDrawer();
-  toast("Telegram account linked!", "success");
-
-  setTimeout(() => closeModal("link-telegram-modal"), 1800);
-}
-
-async function populateProfileDrawer() {
-  const fields = document.getElementById("profile-fields");
-  fields.innerHTML = "";
-  const loadingMsg = document.createElement("p");
-  loadingMsg.className = "muted small";
-  loadingMsg.textContent = "Loading...";
-  fields.appendChild(loadingMsg);
-
-  const tgUser = tg?.initDataUnsafe?.user;
-  let profile = null;
-  try {
-    profile = await api(`/api/profile/${state.playerId}`);
-  } catch (e) {
-    fields.innerHTML = "";
-    const errorMsg = document.createElement("p");
-    errorMsg.className = "muted small";
-    errorMsg.textContent = isIdentityError(e)
-      ? "Session needs refresh — close and reopen the app from Telegram."
-      : "Profile info unavailable — it will update automatically.";
-    fields.appendChild(errorMsg);
-    // Silently retry in the background — no button, no friction.
-    setTimeout(() => populateProfileDrawer(), 8000);
-    return;
-  }
-
-  fields.innerHTML = "";
-  const frag = document.createDocumentFragment();
-
-  // Helper to build a section
-  const addSection = (title, items) => {
-    const head = document.createElement("div");
-    head.className = "profile-section-title";
-    head.textContent = title;
-    frag.appendChild(head);
-
-    const group = document.createElement("div");
-    group.className = "profile-group";
-    items.forEach(([label, value, extraClass]) => {
-      const field = document.createElement("div");
-      field.className = "profile-field";
-      const lbl = document.createElement("span");
-      lbl.className = "label";
-      lbl.textContent = label;
-      const val = document.createElement("span");
-      val.className = "value" + (extraClass ? ` ${extraClass}` : "");
-      val.textContent = value;
-      field.append(lbl, val);
-      group.appendChild(field);
-    });
-    frag.appendChild(group);
-  };
-
-  addSection("Identity", [
-    ["Name", tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : profile.display_name || "-"],
-    ["Username", tgUser?.username ? `@${tgUser.username}` : "-"],
-    ["User ID", String(tgUser?.id || profile.telegram_id || "-")],
-  ]);
-
-  addSection("Account", [
-    ["Contact", profile.phone_number || "Not shared"],
-    ["Status", profile.is_registered ? "Registered" : "Unregistered", profile.is_registered ? "success" : ""],
-  ]);
-
-  addSection("Wallet", [
-    ["Total Balance", `${profile.balance} ETB`, "highlight"],
-    ["Withdrawable", `${profile.won_balance} ETB`, "success"],
-    ["Bonus Credit", `${profile.bonus_balance} ETB`],
-    ["Lifetime In", `${profile.lifetime_deposited} ETB`],
-  ]);
-
-  fields.appendChild(frag);
-}
-
-async function openReferralModal() {
-  openModal("referral-modal");
-  const content = document.getElementById("referral-modal-content");
-  content.innerHTML = '<div class="loader" style="margin: 2rem auto;"></div>';
-
-  try {
-    const ref = await api(`/api/referral-link/${state.playerId}`);
-    content.innerHTML = "";
-
-    // Stats row
-    const statsRow = document.createElement("div");
-    statsRow.className = "referral-stats-row";
-    statsRow.innerHTML = `
-      <div class="ref-stat">
-        <span class="ref-stat-val">${ref.total_invited || 0}</span>
-        <span class="ref-stat-lbl">Total Invited</span>
-      </div>
-      <div class="ref-stat">
-        <span class="ref-stat-val">${ref.referral_count}/${ref.max_referrals}</span>
-        <span class="ref-stat-lbl">Paid Invites</span>
-      </div>
-      <div class="ref-stat">
-        <span class="ref-stat-val">${ref.bonus_per_referral} ETB</span>
-        <span class="ref-stat-lbl">Per Invite</span>
-      </div>
-    `;
-    content.appendChild(statsRow);
-
-    if (true) { // Always show referral link and share button so users can always share their link (Issue 2)
-      // Referral link copy area
-      const label = document.createElement("label");
-      label.className = "field-label";
-      label.textContent = "Your Referral Link";
-
-      const linkWrap = document.createElement("div");
-      linkWrap.className = "referral-link-wrap";
-
-      const linkInput = document.createElement("input");
-      linkInput.type = "text";
-      linkInput.readOnly = true;
-      linkInput.className = "referral-link-input";
-      linkInput.value = ref.referral_link;
-
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "referral-copy-btn";
-      copyBtn.textContent = "Copy";
-
-      copyBtn.addEventListener("click", async () => {
-        try {
-          if (navigator.clipboard) {
-            await navigator.clipboard.writeText(ref.referral_link);
-          } else {
-            linkInput.select();
-            document.execCommand("copy");
-          }
-          copyBtn.textContent = "Copied!";
-          setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
-          toast("Copied!", "success");
-        } catch (_) {
-          toast("Could not copy", "error");
-        }
-      });
-
-      linkWrap.append(linkInput, copyBtn);
-      content.append(label, linkWrap);
-
-      // Share via Telegram button
-      const shareBtn = document.createElement("button");
-      shareBtn.className = "referral-share-btn";
-      shareBtn.textContent = "📤 Share via Telegram";
-      shareBtn.addEventListener("click", () => {
-        const freeCredit = ref.free_credit_amount || 50;
-        const shareText = `🎮 Join me on Melbete Games! 🎪\n\nI'm playing Melbete Bingo, the ultimate live 75-ball bingo game! Play with real people, win awesome payouts, and claim your ${freeCredit} ETB FREE welcome credit immediately! 💰\n\n👇 TAP HERE TO PLAY NOW AND CLAIM YOUR FREE CREDIT! 👇`;
-        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(ref.referral_link)}&text=${encodeURIComponent(shareText)}`;
-        if (tg?.openTelegramLink) {
-          tg.openTelegramLink(shareUrl);
-        } else {
-          window.open(shareUrl, "_blank");
-        }
-      });
-      content.appendChild(shareBtn);
-    }
-    if (ref.slots_remaining <= 0) {
-      const maxMsg = document.createElement("p");
-      maxMsg.className = "muted small";
-      maxMsg.style.textAlign = "center";
-      maxMsg.style.marginTop = "1rem";
-      maxMsg.textContent = `You've reached the maximum of ${ref.max_referrals} referrals. Well done! 🎉`;
-      content.appendChild(maxMsg);
-    }
-  } catch (err) {
-    content.innerHTML = `<p class="muted small" style="text-align: center; padding: 1rem 0;">Failed to load referral stats. Please make sure you are registered through the Telegram bot first.</p>`;
-  }
-}
-
-function openSupport() {
-  const link = getSupportLink();
-  if (tg?.openTelegramLink) {
-    tg.openTelegramLink(link);
-  } else {
-    window.open(link, "_blank");
-  }
-}
-
-// ---------------------------------------------------------------------
 // Wire up
 // ---------------------------------------------------------------------
 function wireEvents() {
@@ -2319,56 +1518,12 @@ function wireEvents() {
     if (input) { input.value = ""; input.focus(); }
     filterCartelas();
   });
-  // The full wallet/profile UI (deposit, withdraw, history, referral,
-  // linking a Telegram account) moved to the game-selection hub (/app) -
-  // it's account-level, not Bingo-specific, and the profile button now
-  // lives only in that hub's header. The listeners below that reference
-  // profile-btn/deposit-modal/etc. are harmless no-ops here (every one
-  // uses `?.`, so a missing element just means "nothing to wire") - kept
-  // as-is rather than stripped out under time pressure, since ripping out
-  // battle-tested payment-flow code is exactly the kind of edit that
-  // deserves its own careful pass, not a rushed one bundled into a
-  // routing change. TODO: once the hub is verified working end-to-end,
-  // delete the now-dead deposit/withdraw/history/referral/link-telegram
-  // function bodies from this file entirely.
+  // Wallet/profile (deposit, withdraw, history, referral, Telegram linking)
+  // lives only on the /app hub - see gameselect.js.
   document.getElementById("game-select-btn")?.addEventListener("click", () => {
     window.location.href = "/app";
   });
 
-  // Profile drawer: open/close
-  document.getElementById("profile-btn")?.addEventListener("click", openProfileDrawer);
-  document.getElementById("profile-close-btn")?.addEventListener("click", closeProfileDrawer);
-  document.getElementById("profile-backdrop")?.addEventListener("click", closeProfileDrawer);
-
-  // Deposit & Withdraw are now inside the profile drawer
-  document.getElementById("profile-deposit-btn")?.addEventListener("click", () => {
-    closeProfileDrawer();
-    openDepositModal();
-  });
-  document.getElementById("profile-withdraw-btn")?.addEventListener("click", () => {
-    closeProfileDrawer();
-    openWithdrawModal();
-  });
-  document.getElementById("profile-referral-btn")?.addEventListener("click", () => {
-    closeProfileDrawer();
-    openReferralModal();
-  });
-  document.getElementById("link-telegram-row")?.addEventListener("click", () => {
-    closeProfileDrawer();
-    openLinkTelegramModal();
-  });
-  document.getElementById("link-telegram-generate-btn")?.addEventListener("click", generateLinkCode);
-
-  document.getElementById("support-btn")?.addEventListener("click", openSupport);
-  // Refresh buttons are removed — the game is fully real-time via WebSocket
-  // and the fast polling fallback. No manual refresh needed.
-  document.getElementById("balance-btn")?.addEventListener("click", openHistoryModal);
-  document.getElementById("deposit-submit-btn")?.addEventListener("click", submitDeposit);
-  document.getElementById("save-address-btn")?.addEventListener("click", saveWithdrawAddress);
-  document.getElementById("withdraw-submit-btn")?.addEventListener("click", submitWithdrawal);
-  document.querySelectorAll(".modal-close").forEach((btn) =>
-    btn.addEventListener("click", () => closeModal(btn.dataset.close))
-  );
   document.getElementById("rooms-btn")?.addEventListener("click", () => {
     // Only block navigation if the user has active cards in a running game.
     // If they have no cards (e.g. they joined a running room as a spectator,
@@ -2382,22 +1537,14 @@ function wireEvents() {
   document.getElementById("winner-close-btn")?.addEventListener("click", goToLobby);
   document.getElementById("winner-rematch-btn")?.addEventListener("click", playAgain);
   document.getElementById("winner-close-x")?.addEventListener("click", goToLobby);
-  wireDepositScreenshotInput();
-  wireAutoGrowTextareas();
 }
 
 async function main() {
   try {
-    initIdentity();
+    initIdentity(state);
     wireEvents();
     document.getElementById("top-bar").classList.remove("hidden");
     await Promise.all([refreshWallet(), loadPrefs()]);
-    try {
-      const limits = await api(`/api/wallet/${state.playerId}/limits`);
-      state.supportContact = limits.support_contact || "@melbete_support_1";
-    } catch (e) {
-      state.supportContact = "@melbete_support_1";
-    }
     await switchToTrackSelect();
     startPolling();
     setInterval(refreshWallet, 8000);

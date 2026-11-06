@@ -79,6 +79,7 @@ def client_ip(request: Request) -> str:
 LIMITS: Dict[str, Tuple[int, float]] = {
     "claim": (8, 10),          # bingo claims; legit play needs 1-2
     "deposit": (5, 60),
+    "agent_apply": (3, 3600),
     "withdraw": (3, 60),
     "bonus_claim": (5, 60),
     "select_cartela": (30, 10),

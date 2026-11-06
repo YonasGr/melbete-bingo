@@ -140,7 +140,7 @@ button:active:not(:disabled) { transform: scale(.97); }
 .gv-ball[data-col="2"] { --ball-a: #f2f2f5; --ball-b: #8d8d99; --ball-glow: rgb(255 255 255 / .35); }
 .gv-ball[data-col="3"] { --ball-a: #58e08a; --ball-b: #15993f; --ball-glow: rgb(34 197 94 / .5); }
 .gv-ball[data-col="4"] { --ball-a: #ffd979; --ball-b: #d99a1c; --ball-glow: rgb(245 196 81 / .55); }
-.gv-ball.melbete-roll { animation: melbete-roll .8s cubic-bezier(.2, .8, .2, 1) both; }
+.gv-ball.melbete-roll { animation: melbete-roll var(--melbete-roll, .8s) cubic-bezier(.2, .8, .2, 1) both; will-change: transform, opacity; }
 @keyframes melbete-roll {
   0%   { transform: translateX(-130%) rotate(-540deg) scale(.6); opacity: 0; }
   55%  { transform: translateX(6%) rotate(24deg) scale(1.08); opacity: 1; }
@@ -191,12 +191,10 @@ button:active:not(:disabled) { transform: scale(.97); }
 #game-view .card-cell.melbete-latest {
   position: relative; z-index: 2;
   box-shadow: 0 0 0 3px #ffb02e;
-  animation: melbete-latest-pulse 1.9s ease-in-out infinite;
+  box-shadow: 0 0 0 3px #ffb02e, 0 0 12px 3px rgba(255, 176, 46, .65);
+  animation: melbete-latest-pop .4s cubic-bezier(.2, .9, .25, 1.2) both;   /* one pop, not an endless repaint */
 }
-@keyframes melbete-latest-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px #ffb02e, 0 0 0 0 rgba(255, 176, 46, .5); }
-  50%      { box-shadow: 0 0 0 3px #ffb02e, 0 0 14px 5px rgba(255, 176, 46, .7); }
-}
+@keyframes melbete-latest-pop { from { transform: scale(1.35); } to { transform: none; } }
 
 /* Winning line: solid gold with dark ink, a slow glow that sweeps along the line. */
 #game-view .card-cell.melbete-line,
@@ -269,3 +267,14 @@ html[data-melbete-level="crown"] #my-cards-container > * { box-shadow: 0 0 0 2px
 .qp-dot.taken { opacity: .4; }
 .qp-chip.taken { opacity: .28; text-decoration: line-through; cursor: not-allowed; }
 .qp-chip { min-height: 46px; }
+
+/* hub picker: 1-4 cartelas */
+.qp-chip.selected { background: var(--melbete-grad); border-color: transparent; color: #14110A; box-shadow: 0 0 0 2px var(--melbete-gold, #FFC933); }
+.qp-chip.mine { background: var(--melbete-gold, #FFC933); color: #14110A; border-color: transparent; opacity: 1; }
+.qp-chip:disabled:not(.taken):not(.mine):not(.selected) { opacity: .45; }
+.qp-bar { position: sticky; bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--melbete-border); border-radius: 14px; background: var(--melbete-surface-2); font-size: 14px; color: var(--melbete-ink); }
+.qp-bar .qp-link { width: 100%; margin: 0; }
+
+/* Hub picker with no active lobby: greyed out, not tappable */
+.quick-picker.waiting .qp-grid { opacity: .4; pointer-events: none; }
+.quick-picker.waiting .qp-sub { color: var(--melbete-gold, #FFC933); }

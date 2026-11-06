@@ -7,7 +7,7 @@
 --
 -- This replaces the previous Firestore data model 1:1 - one table per
 -- former collection, same field names, so the migration only changes how
--- data is stored, never what is stored. See MIGRATING_TO_SUPABASE.md for
+-- data is stored, never what is stored. See docs/deployment.md for
 -- the full story and setup steps.
 --
 -- Design notes:
@@ -137,8 +137,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     payment_method            TEXT,
     screenshot_file_id        TEXT,
     screenshot_url            TEXT,
-    sms_text                  TEXT,
-    payment_verification_url  TEXT,
     room_id                   TEXT,
     admin_id                  TEXT,
     note                      TEXT,
@@ -639,3 +637,129 @@ CREATE INDEX IF NOT EXISTS idx_player_notes_player ON player_notes (player_id, c
 
 -- per-admin Telegram alert subscriptions (migrations/202610310002_admin_alerts.sql)
 ALTER TABLE admins ADD COLUMN IF NOT EXISTS alert_types JSONB;
+-- Agent registration requests (a player applies from the Mini App, an admin approves or rejects) and a
+-- per-agent switch for the reward programme. Idempotent.
+
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS rewards_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+
+CREATE TABLE IF NOT EXISTS agent_applications (
+    id           TEXT PRIMARY KEY,
+    player_id    TEXT NOT NULL,
+    note         TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewed_by  TEXT,
+    review_note  TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_at  TIMESTAMPTZ
+);
+-- one open application per player
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_applications_pending ON agent_applications (player_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_agent_applications_status ON agent_applications (status, created_at DESC);
+-- Admin-controlled leaderboard campaigns: the admin picks the start/end date-time (in a chosen timezone),
+-- budget, winner count, points per cartela, wagering multiplier and an optional Telegram-channel reward.
+-- Ending a campaign never pays anything: the admin approves or rejects the distribution. Idempotent.
+
+CREATE TABLE IF NOT EXISTS leaderboard_campaigns (
+    id                   TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    timezone             TEXT NOT NULL DEFAULT 'Africa/Addis_Ababa',
+    starts_at            TIMESTAMPTZ NOT NULL,
+    ends_at              TIMESTAMPTZ NOT NULL,
+    budget_etb           INTEGER NOT NULL CHECK (budget_etb >= 1),
+    winners_count        INTEGER NOT NULL CHECK (winners_count BETWEEN 1 AND 10000),
+    points_per_cartela   INTEGER NOT NULL CHECK (points_per_cartela BETWEEN 1 AND 1000),
+    wagering_multiplier  INTEGER NOT NULL DEFAULT 37 CHECK (wagering_multiplier BETWEEN 0 AND 1000),
+    channel_enabled      BOOLEAN NOT NULL DEFAULT FALSE,
+    channel_username     TEXT NOT NULL DEFAULT '',
+    channel_points       INTEGER NOT NULL DEFAULT 50 CHECK (channel_points BETWEEN 0 AND 10000),
+    cancelled            BOOLEAN NOT NULL DEFAULT FALSE,
+    distribution_status  TEXT NOT NULL DEFAULT 'none' CHECK (distribution_status IN ('none', 'approved', 'rejected')),
+    decided_by           TEXT,
+    decided_at           TIMESTAMPTZ,
+    decision_note        TEXT NOT NULL DEFAULT '',
+    total_distributed    INTEGER NOT NULL DEFAULT 0,
+    created_by           TEXT NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (ends_at > starts_at)
+);
+
+-- Every point ever awarded (cartela points and channel points are separate sources).
+CREATE TABLE IF NOT EXISTS leaderboard_points (
+    id           TEXT PRIMARY KEY,
+    campaign_id  TEXT NOT NULL REFERENCES leaderboard_campaigns (id),
+    player_id    TEXT NOT NULL,
+    source       TEXT NOT NULL CHECK (source IN ('cartela', 'channel')),
+    points       INTEGER NOT NULL CHECK (points >= 0),
+    dedupe_key   TEXT NOT NULL UNIQUE,            -- cartela:<card id>  /  channel:<campaign>:<player>
+    note         TEXT NOT NULL DEFAULT '',
+    revoked      BOOLEAN NOT NULL DEFAULT FALSE,
+    revoked_by   TEXT,
+    revoked_at   TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lb_points_campaign_player ON leaderboard_points (campaign_id, player_id);
+-- the channel reward can be earned once per player per campaign (a revoked claim cannot be re-claimed)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lb_channel_once ON leaderboard_points (campaign_id, player_id) WHERE source = 'channel';
+
+-- Every channel verification attempt, successful or not, for admin review and rate limiting.
+CREATE TABLE IF NOT EXISTS leaderboard_channel_attempts (
+    id           TEXT PRIMARY KEY,
+    campaign_id  TEXT NOT NULL,
+    player_id    TEXT NOT NULL,
+    result       TEXT NOT NULL,                   -- credited | not_member | unverifiable | duplicate
+    detail       TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_lb_attempts ON leaderboard_channel_attempts (campaign_id, player_id, created_at DESC);
+
+-- Approved rewards. The ETB lands in bonus_balance; after the player has wagered amount x multiplier
+-- in stakes, up to `amount_etb` of their bonus balance becomes withdrawable.
+CREATE TABLE IF NOT EXISTS leaderboard_rewards (
+    id              TEXT PRIMARY KEY,
+    campaign_id     TEXT NOT NULL REFERENCES leaderboard_campaigns (id),
+    player_id       TEXT NOT NULL,
+    rank            INTEGER NOT NULL,
+    points          INTEGER NOT NULL,
+    amount_etb      INTEGER NOT NULL CHECK (amount_etb >= 0),
+    wager_required  INTEGER NOT NULL CHECK (wager_required >= 0),
+    wagered         INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'locked' CHECK (status IN ('locked', 'released')),
+    credited_at     TIMESTAMPTZ,
+    released_at     TIMESTAMPTZ,
+    released_etb    INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (campaign_id, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_lb_rewards_player ON leaderboard_rewards (player_id, status);
+-- Daily missions ("play N rounds today -> bonus ETB"). One row per player per EAT day per mission; the primary key
+-- is the once-only guard. Idempotent.
+CREATE TABLE IF NOT EXISTS daily_mission_claims (
+    player_id   TEXT NOT NULL,
+    day         DATE NOT NULL,
+    rounds      INTEGER NOT NULL,
+    amount      INTEGER NOT NULL CHECK (amount > 0),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (player_id, day, rounds)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_mission_claims_day ON daily_mission_claims (day);
+
+-- Audit log is append-only; finance export / reconciliation index (see migrations/202611010001_*.sql)
+CREATE OR REPLACE FUNCTION admin_audit_log_append_only() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'admin_audit_log is append-only (% is not allowed)', TG_OP;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_admin_audit_append_only ON admin_audit_log;
+CREATE TRIGGER trg_admin_audit_append_only
+    BEFORE UPDATE OR DELETE ON admin_audit_log
+    FOR EACH ROW EXECUTE FUNCTION admin_audit_log_append_only();
+
+DROP TRIGGER IF EXISTS trg_admin_audit_no_truncate ON admin_audit_log;
+CREATE TRIGGER trg_admin_audit_no_truncate
+    BEFORE TRUNCATE ON admin_audit_log
+    FOR EACH STATEMENT EXECUTE FUNCTION admin_audit_log_append_only();
+
+-- Index for TransactionRepository.list_for_export() / daily_money_summary()
+CREATE INDEX IF NOT EXISTS idx_transactions_type_created ON transactions (type, created_at DESC);

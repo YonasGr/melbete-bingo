@@ -78,7 +78,7 @@ SETTINGS_SPEC: dict[str, tuple] = {
     "payout_ratio": (float, 0.5, 1.0),         # 0.8 = 20% platform commission
     "lobby_countdown_seconds": (int, 5, 300),
     "draw_interval": (int, 1, 30),
-    "cards_per_player": (int, 1, 50),
+    "cards_per_player": (int, 1, 4),
     "min_cartelas_to_start": (int, 1, 500),
     "cartela_min": (int, 1, 10_000),
     "cartela_max": (int, 1, 10_000),

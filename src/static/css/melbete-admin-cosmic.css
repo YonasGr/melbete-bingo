@@ -143,3 +143,21 @@ button.lv-alert { cursor: pointer; }
 .lv-bar.rev, .lv-dot.rev { background: linear-gradient(180deg, #8B5CF6, #5B3FD0); } .lv-bar.neg { background: #F87171; }
 .lv-col small { color: var(--ink-600); font-size: .7rem; }
 .lv-legend { display: flex; gap: 1rem; margin-top: .6rem; color: var(--ink-600); font-size: .8rem; } .lv-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: .35rem; }
+
+/* Light-theme leftovers from admin.css that stayed white (light text on white = unreadable):
+   the mobile "More tools" tiles, modal headers, settings nav/save bar, product switcher. */
+.sheet-tile, .settings-nav > button, .product-switcher > button {
+  background: rgb(255 255 255 / .06); color: var(--ink-950); border: 1px solid rgb(255 201 51 / .22);
+}
+.sheet-tile span { color: #FFC933; }
+.sheet-tile:active, .settings-nav > button:active { background: rgb(255 201 51 / .16); }
+.sheet-grabber { background: rgb(255 255 255 / .22); }
+.more-sheet h2 { color: var(--ink-950); }
+.sheet-logout { background: rgb(217 58 58 / .18); color: #FF8A8A; }
+.modal-header { background: rgb(21 21 27 / .96); color: var(--ink-950); border-bottom-color: var(--line); }
+.modal-close-btn { background: rgb(255 255 255 / .08); color: var(--ink-800); }
+.settings-savebar { background: rgb(21 21 27 / .96); color: var(--ink-950); border-color: var(--line); }
+.admin-avatar { background: rgb(255 201 51 / .16); color: #FFC933; }
+.command-account button:hover { background: rgb(255 255 255 / .08); color: var(--ink-950); }
+.bottom-nav { background: rgb(21 21 27 / .96); border-top-color: var(--line); }
+.bottom-nav-item { color: var(--ink-600); }

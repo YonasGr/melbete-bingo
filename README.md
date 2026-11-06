@@ -1,8 +1,8 @@
 # 🎉 Melbete Bingo
 
 A real-time multiplayer Bingo game built as a **Telegram Mini App**, with
-75-ball and 90-ball variants, server-verified claims, and an auditable
-random number generator. All game state lives in **Postgres, via
+a wallet in ETB, manually approved deposits and withdrawals, server-verified
+claims, an auditable random number generator and an admin panel. All game state lives in **Postgres, via
 Supabase** - setup is: create a free Supabase project, run one schema
 file, get a Telegram bot token, set a few environment variables, run...
 
@@ -12,17 +12,13 @@ file, get a Telegram bot token, set a few environment variables, run...
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 **New to this repo?** Start here, then:
-- [MELBETE_BINGO_GUIDE.md](MELBETE_BINGO_GUIDE.md) - how to play/host a game
-  once the bot is running
-- [MIGRATING_TO_SUPABASE.md](MIGRATING_TO_SUPABASE.md) - the full database
-  setup walkthrough (schema, connection string, everything)
-- [DEPLOYMENT.md](DEPLOYMENT.md) - deploying to
-  Render/Railway/Fly.io/Cloud Run/Azure
-- [WINDOWS_LOCAL_DEPLOYMENT.md](WINDOWS_LOCAL_DEPLOYMENT.md) - running the
-  complete stack locally on a Windows PC 24/7 with Docker Desktop
-- [AWS_SHARED_HOST_DEPLOYMENT.md](AWS_SHARED_HOST_DEPLOYMENT.md) - deploying
-  alongside the live Safari-Games AWS host
-- [API_REFERENCE.md](API_REFERENCE.md) - REST + WebSocket API reference.
+- [docs/deployment.md](docs/deployment.md) - database, secrets, Azure and other
+  hosts, scaling, CI/CD (one guide)
+- [docs/operations.md](docs/operations.md) - admin roles, audit log, daily
+  reconciliation, CSV exports
+- [docs/security.md](docs/security.md) - admin 2FA, rotating secrets
+- [docs/architecture.md](docs/architecture.md) - code layout and the money model
+- [docs/README.md](docs/README.md) - full documentation index
 - [CONTRIBUTING.md](CONTRIBUTING.md) - contribution guidelines
 
 ## Contents
@@ -42,12 +38,12 @@ file, get a Telegram bot token, set a few environment variables, run...
 
 ## How it works
 
-- **Telegram bot** (`src/bot`) handles chat commands (`/start`, `/play`,
-  `/create`, `/join`) and hands off to a **Mini App** - a small web app
+- **Telegram bot** (`src/bot`) handles chat commands (`/start`, `/play`, `/balance`, `/topup`, `/help` and the
+  admin approval buttons) and hands off to a **Mini App** - a small web app
   Telegram renders inside the chat.
-- **FastAPI backend** (`src/api`) serves that Mini App, a REST API for
-  room/card/claim management, and a WebSocket endpoint that broadcasts
-  live game events (numbers drawn, players joining, claim results).
+- **FastAPI backend** (`src/api`) serves that Mini App and the admin panel,
+  a REST API for wallet/card/claim management, and a WebSocket endpoint that
+  broadcasts live game events (numbers drawn, players joining, claim results).
 - **Game logic** (`src/services/game_service.py`) is pure, dependency-free
   Python: card generation, the seeded RNG draw engine, and pattern
   verification. It's unit-tested with no external services required.
@@ -89,7 +85,7 @@ src/
 └── tests/                 Unit tests
 supabase/
 └── schema.sql             Full Postgres schema - run once against a new
-                            Supabase project (see MIGRATING_TO_SUPABASE.md)
+                            Supabase project (see docs/deployment.md)
 ```
 
 ## Prerequisites
@@ -122,12 +118,12 @@ chat, `t.me/<username>`) - you'll need both.
 
 Full details, including why the pooler variant specifically and how to
 verify your setup actually works before deploying, are in
-[MIGRATING_TO_SUPABASE.md](MIGRATING_TO_SUPABASE.md).
+[docs/deployment.md](docs/deployment.md#1-database).
 
 ### 3. Configure environment variables
 
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 Edit `.env`:
@@ -175,19 +171,15 @@ to the `https://*.ngrok.io` URL it gives you before starting the bot.
 ## Running with Docker
 
 ```bash
-cp env.example .env   # fill in real values first
+cp .env.example .env   # fill in real values first
 docker compose up --build
 ```
 
-This starts the API, bot, and a local Postgres database. For a permanent
-Windows setup with automatic startup, backups, and optional Cloudflare HTTPS,
-follow [WINDOWS_LOCAL_DEPLOYMENT.md](WINDOWS_LOCAL_DEPLOYMENT.md).
-
-To also start the optional Cloudflare Tunnel, put its token in `.env` and run:
-
-```bash
-docker compose --profile public up --build -d
-```
+This starts two containers - the API and the bot - both talking to your
+real Supabase Postgres project (there are no local database containers to
+manage, though `docker-compose.yml` also has a commented-out local
+Postgres service if you'd rather develop fully offline). See
+`docker-compose.yml` for details.
 
 ## Testing
 
@@ -215,11 +207,10 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/bingo_test" \
 
 ## Deploying
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide, covering:
-- One-time Supabase setup
-- Render, Railway, Fly.io, Google Cloud Run, and Azure walkthroughs
-- Long-polling vs. webhook bot deployment
-- Scaling notes and cost expectations
+See [docs/deployment.md](docs/deployment.md) for the full guide: database setup,
+Azure (one command, plus CI/CD), Render/Railway/Fly.io/Cloud Run, scaling and
+backups. A fresh install runs `supabase/schema.sql` against a new empty database;
+never apply historical migrations to it.
 
 ## Troubleshooting
 
@@ -227,24 +218,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the full guide, covering:
   startup - `DATABASE_URL` is missing, wrong, or your Supabase project's
   connection pooler isn't reachable. The app fails fast on startup so
   this is easy to spot in the logs. See
-  [MIGRATING_TO_SUPABASE.md](MIGRATING_TO_SUPABASE.md#troubleshooting).
+  [docs/deployment.md](docs/deployment.md#5-first-start-and-smoke-test).
 - **Mini App button does nothing** - `PUBLIC_BASE_URL` must be a real,
   reachable HTTPS URL (Telegram Mini Apps refuse plain `http://`, except
   when testing via `t.me` deep links in some clients - use ngrok locally).
-- **`/join` says room not found** - the API and bot must point at the
-  *same* `DATABASE_URL`.
-- More gameplay/hosting troubleshooting: see
-  [MELBETE_BINGO_GUIDE.md](MELBETE_BINGO_GUIDE.md#-troubleshooting).
+- **Bot and Mini App disagree about a player or balance** - the API and bot
+  must point at the *same* `DATABASE_URL`.
 
 ## License
 
 MIT License - see [LICENSE](LICENSE).
 
-
-## Fresh Bingo-only deployment
-
-For a new installation with a clean database, follow [`FRESH_DEPLOYMENT.md`](FRESH_DEPLOYMENT.md). Run [`supabase/schema.sql`](supabase/schema.sql) against a new empty database; do not apply historical migrations from older releases.
-
-## Deploying
-
-Azure (Container Apps, one command): see [DEPLOY_AZURE.md](DEPLOY_AZURE.md).

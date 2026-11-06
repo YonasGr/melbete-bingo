@@ -3,9 +3,11 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-melbete_bingo}
-      POSTGRES_USER: ${POSTGRES_USER:-bingo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_test_password}
+      POSTGRES_DB: melbete_bingo
+      POSTGRES_USER: bingo
+      POSTGRES_PASSWORD: local_test_password
+    ports:
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -21,10 +23,6 @@ services:
       - "8001:8000"
     env_file:
       - .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-bingo}:${POSTGRES_PASSWORD:-local_test_password}@db:5432/${POSTGRES_DB:-melbete_bingo}
-      HOST: 0.0.0.0
-      PORT: 8000
     depends_on:
       db:
         condition: service_healthy
@@ -35,24 +33,11 @@ services:
     command: ["python", "main.py", "bot"]
     env_file:
       - .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-bingo}:${POSTGRES_PASSWORD:-local_test_password}@db:5432/${POSTGRES_DB:-melbete_bingo}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
-  # Optional public HTTPS ingress. Run with:
-  # docker compose --profile public up -d
-  # CLOUDFLARE_TUNNEL_TOKEN must be set in .env first.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    profiles: ["public"]
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    depends_on:
-      api:
-        condition: service_started
-    restart: unless-stopped
-
 volumes:
   postgres_data:
+

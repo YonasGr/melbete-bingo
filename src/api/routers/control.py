@@ -75,17 +75,27 @@ async def control_discard(request: Request, admin_id: str = Depends(require_admi
 @router.post("/api/admin/control/publish")
 async def control_publish(request: Request, admin_id: str = Depends(require_admin_dep)):
     try:
-        return await get_control_service().publish(admin_id, ip=client_ip(request))
+        snapshot = await get_control_service().publish(admin_id, ip=client_ip(request))
     except ControlError as e:
         _raise(e)
+    from src.services.lobby_sync import sync_waiting_lobbies
+
+    if isinstance(snapshot, dict):
+        snapshot["lobby_sync"] = await sync_waiting_lobbies()
+    return snapshot
 
 
 @router.post("/api/admin/control/rollback")
 async def control_rollback(request: Request, admin_id: str = Depends(require_admin_dep)):
     try:
-        return await get_control_service().rollback(admin_id, ip=client_ip(request))
+        snapshot = await get_control_service().rollback(admin_id, ip=client_ip(request))
     except ControlError as e:
         _raise(e)
+    from src.services.lobby_sync import sync_waiting_lobbies
+
+    if isinstance(snapshot, dict):
+        snapshot["lobby_sync"] = await sync_waiting_lobbies()
+    return snapshot
 
 
 @router.post("/api/admin/control/emergency")

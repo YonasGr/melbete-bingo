@@ -36,7 +36,6 @@ class ClaimOutcome:
     card: Optional[Card]
     payout: int = 0
     winner: Optional[dict] = None
-    pending: bool = False
 
 
 class RoomNotFoundError(Exception):
@@ -56,6 +55,9 @@ class TooManyCartelasError(Exception):
 
 
 class RoomService:
+    # A player may reserve between 1 and this many cartelas per round, whatever the admin setting says.
+    MAX_CARTELAS_PER_PLAYER = 4
+
     # Once the lobby countdown reaches this many seconds remaining, all
     # cartela activity (picking or releasing) is locked - the round is
     # about to charge everyone and start, so a pick/release landing in
@@ -110,6 +112,7 @@ class RoomService:
         # Optional async callable(set_of_player_ids), set by the API layer: called (in the background,
         # never blocking or failing the round) once a round has started with these players charged.
         self.on_round_started = None
+        self.on_cards_charged = None   # async (cards, stake): leaderboard points + wagering progress
         self._hook_tasks: set = set()
         # Per-player locks preventing the double-select race when someone
         # taps a cartela button faster than the DB round-trip.
@@ -164,7 +167,7 @@ class RoomService:
             "stake_amount": s.stake_amount_real_10,
             "bot_enabled": s.bot_enabled_real_10,
             "max_bots": s.max_bots_real_10,
-                # Real balance is spent before bonus credit.
+            # Bonus-first is the published, deterministic cartela funding rule.
             # The prize pool is still split by actual funding source at settlement.
             "funding_mode": "any",
         }
@@ -357,7 +360,7 @@ class RoomService:
         lock = self._get_player_lock(player_id)
         async with lock:
             # These three reads are independent of each other - fire them
-            # together instead of one-at-a-time. Each Firestore round
+            # together instead of one-at-a-time. Each database round
             # trip is real, felt latency on a "tap a number" interaction
             # that needs to feel instant; running them concurrently cuts
             # that wait roughly to the slowest single call instead of the
@@ -375,9 +378,10 @@ class RoomService:
             if cartela_number in room.taken_cartelas:
                 raise CartelaTakenError(f"Cartela {cartela_number} is already taken")
 
-            if len(existing) >= room.cards_per_player:
+            limit = max(1, min(int(room.cards_per_player or 1), self.MAX_CARTELAS_PER_PLAYER))
+            if len(existing) >= limit:
                 raise TooManyCartelasError(
-                    f"You can play with at most {room.cards_per_player} cartela(s) per round"
+                    f"You can play with at most {limit} cartela(s) per round"
                 )
 
             # Soft balance check so players can't reserve a card they clearly
@@ -406,7 +410,7 @@ class RoomService:
 
             taken = room.taken_cartelas + [cartela_number]
             fields = {"taken_cartelas": taken}
-            min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 3) or 1), 1)
+            min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
             if len(taken) >= min_cartelas and not room.countdown_started_at:
                 # The lobby has enough cartelas (they may all belong to one
                 # player) - the 30s clock starts now.
@@ -441,7 +445,7 @@ class RoomService:
             if card.cartela_number in room.taken_cartelas:
                 room.taken_cartelas.remove(card.cartela_number)
         fields = {"taken_cartelas": room.taken_cartelas}
-        min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 3) or 1), 1)
+        min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
         if len(room.taken_cartelas) < min_cartelas:
             # Not enough cartelas any more - stop the clock; it restarts
             # from the full 30s when the lobby reaches the minimum again.
@@ -451,11 +455,12 @@ class RoomService:
         return room
 
     async def cancel_round(self, room_id: str) -> GameRoom:
-        """Mark an unstartable lobby cancelled, then let the next lookup
-        create a fresh waiting lobby. No refunds are needed."""
+        """Nobody could actually be charged at round start (e.g. everyone's
+        balance changed) - reset back to `waiting` with an empty board. No
+        refunds needed since nothing was ever charged during selection."""
         await self.rooms.update(
             room_id,
-            {"taken_cartelas": [], "prize_pool": 0, "state": "cancelled", "countdown_started_at": None},
+            {"taken_cartelas": [], "prize_pool": 0, "state": "waiting", "countdown_started_at": None},
         )
         room = await self.get_room(room_id)
         cards = await self.cards.list_by_room(room_id)
@@ -486,11 +491,8 @@ class RoomService:
         s = await self.settings_repo.get_or_create()
         required_cartelas = max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
         if len(cards) < required_cartelas:
-            # A countdown can expire after a player leaves or loses funds.
-            # Preserve the cancelled marker so the next lookup rotates this
-            # empty/unstartable lobby instead of exposing it indefinitely.
-            if cards:
-                await self.cancel_round(room_id)
+            # Defensive: the lobby timer only runs with enough cartelas. Leave
+            # the lobby open (waiting) instead of cancelling it.
             return None, []
         charged_cartelas: list[int] = []
         charged_cards: list[tuple[Card, str]] = []
@@ -545,7 +547,33 @@ class RoomService:
         room.prize_pool_bonus = pool_bonus
         room.state = "running"
         self._fire_round_started(charged_players)
+        self._fire_cards_charged([card for card, _ in charged_cards], room.stake_amount)
         return room, dropped
+
+    def _fire_cards_charged(self, cards, stake) -> None:
+        hook = self.on_cards_charged
+        if hook is None or not cards:
+            return
+
+        async def _run() -> None:
+            try:
+                await hook(list(cards), int(stake))
+            except Exception:  # noqa: BLE001 - bookkeeping must never affect a round
+                logger.exception("on_cards_charged hook failed")
+
+        try:
+            task = asyncio.get_running_loop().create_task(_run())
+        except RuntimeError:
+            return
+        self._hook_tasks.add(task)
+        task.add_done_callback(self._hook_tasks.discard)
+
+    async def _balance_after(self, player_id: str):
+        """Real balance for the win message; None if it cannot be read (the message then just omits it)."""
+        try:
+            return int((await self.wallets.get_or_create_wallet(player_id)).balance)
+        except Exception:  # noqa: BLE001 - never let a notification detail affect a payout
+            return None
 
     def _fire_round_started(self, player_ids) -> None:
         hook = self.on_round_started
@@ -621,6 +649,12 @@ class RoomService:
         if not card:
             raise RoomNotFoundError(f"Card {card_id} not found")
 
+        # A claim only counts for a card the claimer holds IN THIS ROUND. Without this check a player could
+        # submit someone else's card, or an old card from a previous round (whose layout may happen to match
+        # the numbers now called), and be paid from a prize pool they never paid a stake into.
+        if card.room_id != room_id or card.owner_id != player_id:
+            return ClaimOutcome(False, "This cartela is not yours in this round.", False, card)
+
         # Any card - bot-owned or a real player's - is judged purely on
         # whether its pattern is actually complete against the numbers
         # actually called, and on the order claims land in (see the lock
@@ -633,15 +667,12 @@ class RoomService:
             # claim / double-tap) or somebody else, without re-verifying
             # a pattern against a round that no longer exists.
             already_won_by_me = any(w.get("player_id") == player_id for w in room.winners)
-            duplicate_multi_winner = already_won_by_me and len(room.winners) > 1
             msg = (
                 "Your win is already confirmed - check the results screen!"
                 if already_won_by_me
                 else "This round has already ended."
             )
-            return ClaimOutcome(True, msg, duplicate_multi_winner, card,
-                                payout=next((int(w.get("payout", 0)) for w in room.winners
-                                             if w.get("player_id") == player_id), 0))
+            return ClaimOutcome(True, msg, False, card)
 
         pattern_name = room.pattern.get("id", "any_line")
         is_valid, message = PatternVerifier.verify_claim(
@@ -740,14 +771,15 @@ class RoomService:
         from src.services import player_notifications as pn
 
         pn.schedule_notify(
-            player_id, "win", {"payout": payout, "cartela_number": card.cartela_number, "shared_with": 1},
+            player_id, "win", {"payout": payout, "cartela_number": card.cartela_number, "shared_with": 1,
+                               "balance": await self._balance_after(player_id)},
             dedupe_key=f"win:{room_id}:{player_id}",
         )
         return ClaimOutcome(True, message, True, card, payout=payout, winner=winner_record)
 
 
     # ------------------------------------------------------------------
-    # Multi-winner rounds (players > settings.multi_winner_min_players)
+    # Winner settlement (all rounds, any number of players)
     #
     # Rule: there is no claim window. After every drawn number the server checks EVERY card in
     # the room. All players whose BINGO is completed by that same last called number win together:
@@ -757,11 +789,10 @@ class RoomService:
     # ------------------------------------------------------------------
 
     async def is_multi_winner_round(self, room_id: str) -> bool:
-        threshold = settings.multi_winner_min_players
-        if threshold <= 0:
-            return False
-        cards = await self.cards.list_by_room(room_id)
-        return len({c.owner_id for c in cards}) > threshold
+        """Every round, of any size, settles the same way: all players whose BINGO is completed by the same
+        last called number split the prize equally (one share per player). This used to apply only above
+        `multi_winner_min_players` players; smaller rounds paid a single, randomly picked winner."""
+        return True
 
     @staticmethod
     def _split_real_bonus(room: GameRoom, payout: int) -> Tuple[int, int, int, int]:
@@ -878,7 +909,8 @@ class RoomService:
 
             pn.schedule_notify(
                 w["player_id"], "win",
-                {"payout": w["payout"], "cartela_number": w.get("cartela_number"), "shared_with": w.get("shared_with", 1)},
+                {"payout": w["payout"], "cartela_number": w.get("cartela_number"), "shared_with": w.get("shared_with", 1),
+                 "balance": await self._balance_after(w["player_id"])},
                 dedupe_key=f"win:{room.id}:{w['player_id']}",
             )
 

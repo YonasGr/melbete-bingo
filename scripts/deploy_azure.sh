@@ -118,7 +118,7 @@ if command -v psql >/dev/null; then
     echo "WARNING: could not reach the database from here. Apply supabase/schema.sql manually before first use."
   fi
 else
-  echo "psql not found - apply supabase/schema.sql to the database manually (see DEPLOY_AZURE.md)."
+  echo "psql not found - apply supabase/schema.sql to the database manually (see docs/deployment.md)."
 fi
 
 echo "==> 4/5 Creating/updating api + bot apps"

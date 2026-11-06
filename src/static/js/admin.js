@@ -22,8 +22,8 @@ window.state = state;
 
 const TAB_TITLES = {
   dashboard: "Dashboard", deposits: "Deposits", withdrawals: "Withdrawals",
-  economy: "Economy", games: "Games History", users: "User Directory",
-  referrals: "Referrals", agents: "Agents", broadcast: "Broadcast", payments: "Payment Methods",
+  economy: "Economy", reconciliation: "Reconciliation", games: "Games History", users: "User Directory",
+  referrals: "Referrals", agents: "Agents", leaderboard: "Leaderboard", broadcast: "Broadcast", payments: "Payment Methods",
   admins: "Admins", settings: "System Settings",
 };
 const TAB_CONTEXT = {
@@ -31,10 +31,12 @@ const TAB_CONTEXT = {
   deposits: "Review incoming money and payment evidence",
   withdrawals: "Process payouts and audit completed requests",
   economy: "Wallet liabilities, revenue, and player ledgers",
+  reconciliation: "Daily money check: wallet integrity, deposits and withdrawals",
   games: "Monitor and audit Bingo",
   users: "Search players and manage account access",
   referrals: "Invitation performance and bonus distribution",
   agents: "Reseller float, commission and player top-ups",
+  leaderboard: "Campaign dates, rewards, wagering and channel claims",
   broadcast: "Compose and monitor Telegram announcements",
   payments: "Deposit and withdrawal provider configuration",
   admins: "Administrative roles and access control",
@@ -168,12 +170,14 @@ const LOADERS = {
   deposits: () => loadDeposits(),
   withdrawals: () => loadWithdrawals(),
   economy: loadEconomy,
+  reconciliation: () => loadReconciliation(),
   games: () => {
     return loadGames();
   },
   users: () => loadUsers(),
   referrals: loadReferrals,
   agents: loadAgents,
+  leaderboard: loadLeaderboard,
   payments: loadPaymentMethods,
   broadcast: loadBroadcastStatus,
   admins: () => Promise.all([loadAdmins(), loadSuperAdminPanel()]),
@@ -413,13 +417,17 @@ function renderDepositCard(d) {
 async function loadWithdrawals(filter = state.currentWithdrawalFilter) {
   state.currentWithdrawalFilter = filter;
   const endpoint = filter === "pending" ? "/api/admin/withdrawals/pending" : `/api/admin/withdrawals/history?status=${filter}`;
-  const { withdrawals } = await api(endpoint);
+  const { withdrawals, big_threshold: bigThreshold } = await api(endpoint);
   const list = document.getElementById("withdrawals-list");
+  const large = filter === "pending" ? (withdrawals || []).filter((w) => w.is_large) : [];
+  const banner = large.length
+    ? `<div class="recon-banner recon-review">💸 ${large.length} large withdrawal${large.length === 1 ? "" : "s"} waiting (${money(bigThreshold)} or more). Check the payout account before paying.</div>`
+    : "";
   if (!withdrawals || !withdrawals.length) {
     list.innerHTML = emptyState("✅", filter === "pending" ? "No pending withdrawals." : "No withdrawal history records found.");
     return;
   }
-  list.innerHTML = withdrawals.map((w) => renderWithdrawalCard(w)).join("");
+  list.innerHTML = banner + withdrawals.map((w) => renderWithdrawalCard(w)).join("");
 }
 
 function renderWithdrawalCard(w) {
@@ -443,7 +451,7 @@ function renderWithdrawalCard(w) {
     : "";
   return recordCard({
     id: w.id,
-    statusHtml: `<span class="pill ${st.cls}">${label}</span>`,
+    statusHtml: `<span class="pill ${st.cls}">${label}</span>${w.is_large ? ' <span class="pill pending">Large</span>' : ""}`,
     title: `${escapeHtml(w.legal_name || w.player_name)} <span class="muted small">(${escapeHtml(w.player_name)})</span>`,
     meta,
     decidedHtml,
@@ -1004,6 +1012,7 @@ document.getElementById("add-admin-form")?.addEventListener("submit", async (e) 
 async function loadAgents() {
   const list = document.getElementById("agents-list");
   loadAgentRewards();  // independent section: must load even when there are no agents yet
+  loadAgentApplications();
   try {
     const { agents } = await api("/api/admin/agents");
     if (!agents.length) { list.innerHTML = emptyState("⚑", "No agents yet."); return; }
@@ -1011,11 +1020,13 @@ async function loadAgents() {
       id: a.id,
       title: `${escapeHtml(a.player_id.replace("tg_", ""))} <span class="muted small">${escapeHtml(a.agent_code)}</span>`,
       statusHtml: `<span class="status-pill">${a.status === "active" ? "Active" : "Suspended"}</span>`,
-      meta: [`Float ${money(a.float_balance)}`, `Commission ${money(a.commission_balance)} (${a.commission_percent}%)`, `${a.player_count} players`, a.tier_label ? `Tier ${escapeHtml(a.tier_label)} ${a.tier_bps / 100}%` : ""],
+      meta: [`Float ${money(a.float_balance)}`, `Commission ${money(a.commission_balance)} (${a.commission_percent}%)`, `${a.player_count} players`, a.tier_label ? `Tier ${escapeHtml(a.tier_label)} ${a.tier_bps / 100}%` : "", a.rewards_enabled === false ? "Rewards off" : "Rewards on"],
       extraHtml: `<div id="agent-ledger-${escapeHtml(a.id)}" class="muted small"></div>`,
       actionsHtml: `<div class="rc-actions">
         <button class="btn" data-action="agent-float" data-id="${a.id}">Adjust float</button>
         <button class="btn" data-action="agent-ledger" data-id="${a.id}">Ledger</button>
+        <button class="btn" data-action="agent-commission" data-id="${a.id}" data-rate="${a.commission_percent}">Edit commission</button>
+        <button class="btn" data-action="agent-rewards" data-id="${a.id}" data-on="${a.rewards_enabled === false ? "0" : "1"}">${a.rewards_enabled === false ? "Turn rewards on" : "Turn rewards off"}</button>
         <button class="btn btn-delete" data-action="${a.status === "active" ? "agent-suspend" : "agent-activate"}" data-id="${a.id}">${a.status === "active" ? "Suspend" : "Activate"}</button>
       </div>`,
     })).join("");
@@ -1023,6 +1034,84 @@ async function loadAgents() {
     list.innerHTML = `<p class="muted">Could not load agents: ${escapeHtml(err.message)}</p>`;
   }
 }
+
+async function loadAgentApplications() {
+  const list = document.getElementById("agent-applications");
+  const count = document.getElementById("agent-applications-count");
+  if (!list) return;
+  try {
+    const { applications } = await api("/api/admin/agent-applications?status=pending");
+    if (count) count.textContent = applications.length ? String(applications.length) : "";
+    if (!applications.length) { list.innerHTML = emptyState("⚑", "No requests waiting."); return; }
+    list.innerHTML = applications.map((a) => recordCard({
+      id: a.id,
+      title: `${escapeHtml(a.display_name || a.telegram_id)} <span class="muted small">${escapeHtml(a.telegram_id)}</span>`,
+      statusHtml: `<span class="status-pill">Pending</span>`,
+      meta: [a.phone_number ? escapeHtml(a.phone_number) : "", `Deposited ${money(a.lifetime_deposited)}`, a.is_banned ? "Banned" : "", escapeHtml(new Date(a.created_at).toLocaleString())],
+      extraHtml: a.note ? `<div class="muted small">“${escapeHtml(a.note)}”</div>` : "",
+      actionsHtml: `<div class="rc-actions">
+        <button class="btn btn-approve" data-action="agent-app-approve" data-id="${a.id}">Approve</button>
+        <button class="btn btn-delete" data-action="agent-app-reject" data-id="${a.id}">Reject</button>
+      </div>`,
+    })).join("");
+  } catch (err) {
+    list.innerHTML = `<p class="muted">Could not load requests: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function reviewAgentApplication(id, approve) {
+  let body = {};
+  if (approve) {
+    const raw = window.prompt("Commission % for this agent (0 to 30):", "3");
+    if (raw === null) return false;
+    const pct = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(pct) || pct < 0 || pct > 30) { toast("Commission must be a number from 0 to 30", "error"); return false; }
+    body = { commission_percent: pct };
+  } else {
+    const note = window.prompt("Reason shown to the player (optional):", "");
+    if (note === null) return false;
+    body = { note: note.trim() };
+  }
+  await api(`/api/admin/agent-applications/${id}/${approve ? "approve" : "reject"}`, { method: "POST", body: JSON.stringify(body) });
+  toast(approve ? "Agent approved" : "Request rejected", "success");
+  await loadAgents();
+  refreshAttention();
+  return true;
+}
+
+async function editAgentCommission(id, current) {
+  const raw = window.prompt("New base commission % (0 to 30). Monthly tiers can still pay more:", String(current ?? 3));
+  if (raw === null) return;
+  const pct = Number(raw);
+  if (raw.trim() === "" || !Number.isFinite(pct) || pct < 0 || pct > 30) { toast("Commission must be a number from 0 to 30", "error"); return; }
+  await api(`/api/admin/agents/${id}/commission`, { method: "PUT", body: JSON.stringify({ commission_percent: pct }) });
+  toast("Commission updated", "success");
+  await loadAgents();
+}
+
+// Register-an-agent: find the player by name, phone or Telegram ID instead of typing a raw ID.
+let agentSearchTimer = null;
+document.getElementById("new-agent-search")?.addEventListener("input", (e) => {
+  clearTimeout(agentSearchTimer);
+  const q = e.target.value.trim();
+  const box = document.getElementById("new-agent-results");
+  if (q.length < 2) { box.innerHTML = ""; return; }
+  agentSearchTimer = setTimeout(async () => {
+    try {
+      const { users } = await api(`/api/admin/users?search=${encodeURIComponent(q)}`);
+      const rows = users.filter((u) => !u.is_banned).slice(0, 6);
+      box.innerHTML = rows.length
+        ? rows.map((u) => `<button type="button" class="player-pick" data-tg="${escapeHtml(u.telegram_id)}"><b>${escapeHtml(u.display_name || u.telegram_id)}</b><span class="muted small">${escapeHtml(u.telegram_id)}${u.phone_number ? " · " + escapeHtml(u.phone_number) : ""}</span></button>`).join("")
+        : `<p class="muted small">No matching player. They must open the bot once first.</p>`;
+    } catch (err) { box.innerHTML = `<p class="muted small">${escapeHtml(err.message)}</p>`; }
+  }, 300);
+});
+document.getElementById("new-agent-results")?.addEventListener("click", (e) => {
+  const btn = e.target.closest(".player-pick");
+  if (!btn) return;
+  document.getElementById("new-agent-id").value = btn.dataset.tg;
+  document.getElementById("new-agent-results").innerHTML = `<p class="muted small">Selected ${escapeHtml(btn.querySelector("b").textContent)} (${escapeHtml(btn.dataset.tg)})</p>`;
+});
 
 document.getElementById("add-agent-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1264,10 +1353,50 @@ async function loadSettings() {
   }
 }
 
+// Game controls: [input id, label, min, max]. Checked here so a typo is caught before it is sent.
+const GAME_CONTROL_RULES = [
+  ["s-stake", "Stake per cartela", 1, 100000],
+  ["s-stake-real-50", "50 ETB room stake", 1, 100000],
+  ["s-stake-bonus", "Bonus room stake", 1, 100000],
+  ["s-countdown", "Lobby countdown", 5, 300],
+  ["s-draw-interval", "Draw interval", 1, 30],
+  ["s-cards-per-player", "Max cartelas per player", 1, 4],
+  ["s-min-players", "Minimum to start", 1, 500],
+];
+
+function validateGameControls() {
+  for (const [id, label, lo, hi] of GAME_CONTROL_RULES) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const raw = String(el.value).trim();
+    const n = Number(raw);
+    if (raw === "" || !Number.isInteger(n) || n < lo || n > hi) {
+      el.focus();
+      return `${label} must be a whole number between ${lo} and ${hi}.`;
+    }
+  }
+  return "";
+}
+
+const LOBBY_FIELD_NAMES = {
+  draw_interval: "draw interval", countdown_seconds: "countdown", min_cartelas_to_start: "minimum to start",
+  stake_amount: "stake", cards_per_player: "cartelas per player", cartela_min: "cartela range", cartela_max: "cartela range",
+};
+function lobbySyncMessage(sync) {
+  if (!sync) return "";
+  const names = (list) => [...new Set((list || []).map((k) => LOBBY_FIELD_NAMES[k] || k))].join(", ");
+  const parts = [];
+  if (sync.applied?.length) parts.push(`Applied to the open lobby: ${names(sync.applied)}.`);
+  if (sync.deferred?.length) parts.push(`From the next round (players already hold cartelas): ${names(sync.deferred)}.`);
+  return parts.join(" ");
+}
+
 document.getElementById("settings-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const problem = validateGameControls();
+  if (problem) { toast(problem, "error"); return; }
   try {
-    await api("/api/admin/settings", {
+    const saved = await api("/api/admin/settings", {
       method: "PUT",
       body: JSON.stringify({
         stake_amount: Number(document.getElementById("s-stake").value),
@@ -1299,7 +1428,7 @@ document.getElementById("settings-form")?.addEventListener("submit", async (e) =
         max_bots_bonus: Number(document.getElementById("s-max-bots-bonus").value),
       }),
     });
-    toast("Settings saved", "success");
+    toast(`Settings saved. ${lobbySyncMessage(saved?.lobby_sync)}`.trim(), "success");
     await loadSettings();
   } catch (err) {
     toast(err.message, "error");
@@ -1492,6 +1621,113 @@ document.getElementById("broadcast-form")?.addEventListener("submit", async (e) 
 /* ===========================================================================
    Economy
    =========================================================================== */
+/* ===========================================================================
+   Reconciliation screen + CSV export (deposits / withdrawals)
+   =========================================================================== */
+function etbNum(n) { return Number(n || 0).toLocaleString(); }
+
+function reconFindings(title, hint, rows, cols) {
+  if (!rows || !rows.length) return "";
+  const head = cols.map((c) => `<th>${escapeHtml(c[1])}</th>`).join("");
+  const body = rows.map((r) => `<tr>${cols.map((c) => `<td>${escapeHtml(r[c[0]])}</td>`).join("")}</tr>`).join("");
+  return `<article class="work-panel recon-finding"><div class="panel-heading"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(hint)}</p></div></div>
+    <div class="table-scroll"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></article>`;
+}
+
+async function loadReconciliation() {
+  const body = document.getElementById("recon-body");
+  const days = document.getElementById("recon-days")?.value || 14;
+  let data;
+  try {
+    data = await api(`/api/admin/reconciliation?days=${encodeURIComponent(days)}`);
+  } catch (e) {
+    body.innerHTML = emptyState("🔒", e.message || "Could not load the reconciliation");
+    return;
+  }
+  const r = data.report, t = r.totals, p = r.pending;
+  const critical = r.negative.length + r.won_over_balance.length;
+  document.getElementById("recon-stamp").textContent = `Live read ${data.generated_at} (Ethiopia time)`;
+
+  const banner = critical
+    ? `<div class="recon-banner recon-alert">🚨 ${critical} wallet${critical === 1 ? "" : "s"} with impossible balances. Check them before approving more payouts.</div>`
+    : `<div class="recon-banner recon-ok">✅ No balance problems found.</div>` +
+      (data.needs_review ? `<div class="recon-banner recon-review">${r.deposit_ledger.length} wallet(s) where lifetime deposits differ from approved top-ups - review below.</div>` : "");
+
+  const cards = [
+    { label: "Player money (real)", value: money(t.real_total), accent: "var(--pos)" },
+    { label: "Withdrawable (won)", value: money(t.withdrawable), accent: "var(--gold)" },
+    { label: "Bonus (not withdrawable)", value: money(t.bonus_total), accent: "var(--accent)" },
+    { label: "Wallets", value: etbNum(t.wallets), accent: "var(--text)" },
+    { label: "Deposits waiting", value: etbNum(p.topups), accent: p.topups ? "var(--warn)" : "var(--pos)" },
+    { label: "Withdrawals waiting", value: `${etbNum(p.withdrawals)} (${money(p.withdrawal_amount)})`, accent: p.withdrawals ? "var(--warn)" : "var(--pos)" },
+    { label: "Pending over 24h", value: etbNum(p.stale), accent: p.stale ? "var(--neg)" : "var(--pos)" },
+  ].map((k) => `<div class="stat-card" style="border-left-color:${k.accent};"><div class="stat-label">${k.label}</div><div class="stat-value" style="color:${k.accent};font-size:1rem;">${k.value}</div></div>`).join("");
+
+  const sum = (key) => data.daily.reduce((a, d) => a + Number(d[key] || 0), 0);
+  const rows = data.daily.map((d) => `<tr>
+      <td>${escapeHtml(d.day)}${d.day === data.today ? " <span class=\"pill info\">today</span>" : ""}</td>
+      <td>${etbNum(d.deposits_approved)} / ${etbNum(d.deposits_approved_etb)}</td><td>${etbNum(d.deposits_rejected)}</td>
+      <td>${etbNum(d.withdrawals_paid)} / ${etbNum(d.withdrawals_paid_etb)}</td><td>${etbNum(d.withdrawals_rejected)}</td>
+      <td>${etbNum(d.deposits_pending)} / ${etbNum(d.withdrawals_pending)}</td>
+      <td style="font-weight:800;color:${d.net_cash_etb >= 0 ? "var(--pos)" : "var(--neg)"};">${etbNum(d.net_cash_etb)}</td></tr>`).join("");
+  const net = sum("deposits_approved_etb") - sum("withdrawals_paid_etb");
+  const daily = data.daily.length ? `<article class="work-panel"><div class="panel-heading"><div><h3>Deposits and withdrawals by day</h3><p>A request counts on the day it was resolved (money moved). ETB shown after the count. Net cash = deposits approved - withdrawals paid.</p></div></div>
+    <div class="table-scroll"><table class="data-table"><thead><tr><th>Day</th><th>Deposits OK (n / ETB)</th><th>Deposits rejected</th><th>Withdrawals paid (n / ETB)</th><th>Withdrawals rejected</th><th>Still pending (dep / wd)</th><th>Net cash ETB</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><th>Total</th><th>${etbNum(sum("deposits_approved"))} / ${etbNum(sum("deposits_approved_etb"))}</th><th>${etbNum(sum("deposits_rejected"))}</th><th>${etbNum(sum("withdrawals_paid"))} / ${etbNum(sum("withdrawals_paid_etb"))}</th><th>${etbNum(sum("withdrawals_rejected"))}</th><th></th><th>${etbNum(net)}</th></tr></tfoot></table></div></article>`
+    : emptyState("📭", "No deposits or withdrawals in this period.");
+
+  body.innerHTML = banner + `<div class="stat-grid report-grid">${cards}</div>` +
+    reconFindings("Negative balances", "A wallet should never go below zero.", r.negative, [["player_id", "Player"], ["balance", "Balance"], ["won_balance", "Won"], ["bonus_balance", "Bonus"]]) +
+    reconFindings("Withdrawable more than balance", "Won winnings can never exceed the real balance.", r.won_over_balance, [["player_id", "Player"], ["balance", "Balance"], ["won_balance", "Won"]]) +
+    reconFindings("Deposits that do not match the ledger", "Lifetime deposited on the wallet differs from the sum of approved top-ups.", r.deposit_ledger, [["player_id", "Player"], ["wallet_total", "Wallet says"], ["ledger_total", "Ledger says"]]) +
+    daily +
+    `<p class="muted small" style="margin-top:.8rem;">This is a live read. The 03:00 job re-reads after 60 seconds and ignores anything that was only a transaction in flight, so re-check a finding before acting on it.</p>`;
+}
+
+function etDate(offsetDays = 0) {
+  return new Date(Date.now() + 3 * 3600 * 1000 + offsetDays * 86400000).toISOString().slice(0, 10);
+}
+
+async function downloadFinanceCsv(kind) {
+  const qs = new URLSearchParams({
+    status: document.getElementById(`${kind}-export-status`).value,
+    start: document.getElementById(`${kind}-export-start`).value,
+    end: document.getElementById(`${kind}-export-end`).value,
+  });
+  const btn = document.getElementById(`${kind}-export-btn`);
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/admin/${kind}s/export.csv?${qs}`, { credentials: "same-origin" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || "Export failed");
+    }
+    const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "")?.[1] || `${kind}s.csv`;
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast(`Exported ${name}`, "success");
+  } catch (e) {
+    toast(e.message || "Export failed", "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function wireFinanceTools() {
+  for (const kind of ["deposit", "withdrawal"]) {
+    document.getElementById(`${kind}-export-start`).value = etDate(-29);
+    document.getElementById(`${kind}-export-end`).value = etDate(0);
+    document.getElementById(`${kind}-export-btn`).addEventListener("click", () => downloadFinanceCsv(kind));
+  }
+  document.getElementById("recon-refresh")?.addEventListener("click", () => loadReconciliation());
+  document.getElementById("recon-days")?.addEventListener("change", () => loadReconciliation());
+}
+
 async function loadEconomy() {
   try {
     const data = await api("/api/admin/economy");
@@ -1780,6 +2016,18 @@ document.addEventListener("click", async (e) => {
       if (!window.confirm("Cancel this reward? The agent will not be paid for it.")) { if (actionsDiv) actionsDiv.querySelectorAll("button").forEach((b) => { b.disabled = false; }); return; }
       await api(`/api/admin/agent-rewards/${id}/cancel`, { method: "POST", body: "{}" }); toast("Reward cancelled", "success"); await loadAgentRewards();
     }
+    if (action && action.startsWith("lb-")) { await leaderboardAction(action, id, btn, actionsDiv); }
+    if (action === "agent-app-approve" || action === "agent-app-reject") {
+      const done = await reviewAgentApplication(id, action === "agent-app-approve");
+      if (!done && actionsDiv) actionsDiv.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+    }
+    if (action === "agent-commission") { await editAgentCommission(id, Number(btn.dataset.rate)); if (actionsDiv) actionsDiv.querySelectorAll("button").forEach((b) => { b.disabled = false; }); }
+    if (action === "agent-rewards") {
+      const turnOn = btn.dataset.on === "0";
+      await api(`/api/admin/agents/${id}/rewards`, { method: "PUT", body: JSON.stringify({ enabled: turnOn }) });
+      toast(turnOn ? "Rewards turned on for this agent" : "Rewards turned off for this agent", "success");
+      await loadAgents();
+    }
     if (action === "agent-suspend")  { await api(`/api/admin/agents/${id}/suspend`, { method: "POST", body: "{}" }); toast("Agent suspended", "success"); await loadAgents(); }
     if (action === "agent-activate") { await api(`/api/admin/agents/${id}/activate`, { method: "POST", body: "{}" }); toast("Agent activated", "success"); await loadAgents(); }
     if (action === "remove-admin")  { await api(`/api/admin/admins/${id}`, { method: "DELETE" }); await loadAdmins(); toast("Admin removed", "success"); }
@@ -1796,6 +2044,7 @@ async function main() {
   wireNav();
   wireTopbarRefresh();
   wireAuditFilterButtons();
+  wireFinanceTools();
   wireUserManageModal();
   wireCommandCenter();
   document.getElementById("logout-btn")?.addEventListener("click", logout);
@@ -1851,3 +2100,245 @@ async function main() {
 }
 
 main();
+
+
+/* ===========================================================================
+   Leaderboard campaigns
+   =========================================================================== */
+const LB_PHASE = { scheduled: "Scheduled", active: "Running", ended: "Ended - awaiting your decision", distributed: "Rewards paid", rejected: "Rejected", cancelled: "Cancelled" };
+let lbCampaigns = [];
+const LB_DEFAULT_TIERS = [
+  { from: 1, to: 1, amount: 20000 }, { from: 2, to: 2, amount: 10000 }, { from: 3, to: 3, amount: 5000 }, { from: 4, to: 10, amount: 1000 },
+  { from: 11, to: 50, amount: 600 }, { from: 51, to: 100, amount: 400 }, { from: 101, to: 200, amount: 100 }, { from: 201, to: 250, amount: 80 },
+];
+let lbTiers = LB_DEFAULT_TIERS.map((t) => ({ ...t }));
+let lbTiersLocked = false;
+
+function lbTiersTotal() { return lbTiers.reduce((sum, t) => sum + Math.max(0, t.to - t.from + 1) * (Number(t.amount) || 0), 0); }
+
+function lbPaintTierSummary() {
+  let next = 1;
+  lbTiers.forEach((t) => { t.from = next; next = Math.max(t.to, t.from) + 1; });
+  document.querySelectorAll("#lb-tiers .lb-tier-from").forEach((el, i) => { el.textContent = `#${lbTiers[i].from}`; });
+  const total = lbTiersTotal(), budget = Number(document.getElementById("lb-budget").value) || 0;
+  const winners = lbTiers.length ? lbTiers[lbTiers.length - 1].to : Number(document.getElementById("lb-winners").value) || 0;
+  if (lbTiers.length) document.getElementById("lb-winners").value = winners;   // legacy campaigns keep their stored winner count
+  const sum = document.getElementById("lb-tier-sum");
+  sum.textContent = `${winners} winners · ladder total ${money(total)} of ${money(budget)} budget${total > budget ? " - over budget!" : total < budget ? ` (${money(budget - total)} unallocated)` : ""}`;
+  sum.style.color = total > budget ? "#f87171" : "";
+}
+
+function lbRenderTiers() {
+  const box = document.getElementById("lb-tiers");
+  if (!box) return;
+  box.innerHTML = lbTiers.map((t, i) => `<div class="lb-tier-row">
+      <span class="lb-tier-from">#${t.from}</span><span>to</span>
+      <input class="lb-tier-to" data-i="${i}" inputmode="numeric" value="${t.to}" aria-label="Last rank of band ${i + 1}" ${lbTiersLocked ? "disabled" : ""}>
+      <input class="lb-tier-amount" data-i="${i}" inputmode="numeric" value="${t.amount}" aria-label="ETB each in band ${i + 1}" ${lbTiersLocked ? "disabled" : ""}><span>ETB each</span>
+      <button type="button" class="btn btn-delete lb-tier-del" data-i="${i}" ${lbTiersLocked || lbTiers.length < 2 ? "disabled" : ""} aria-label="Remove band ${i + 1}">✕</button></div>`).join("");
+  ["lb-tier-add", "lb-tier-default"].forEach((id) => { const b = document.getElementById(id); if (b) b.disabled = lbTiersLocked; });
+  lbPaintTierSummary();
+}
+
+document.getElementById("lb-tiers")?.addEventListener("input", (e) => {
+  const i = Number(e.target.dataset.i);
+  if (Number.isNaN(i) || !lbTiers[i]) return;
+  if (e.target.classList.contains("lb-tier-to")) lbTiers[i].to = Number(e.target.value) || 0;
+  if (e.target.classList.contains("lb-tier-amount")) lbTiers[i].amount = Number(e.target.value) || 0;
+  lbPaintTierSummary();
+});
+document.getElementById("lb-tiers")?.addEventListener("click", (e) => {
+  const del = e.target.closest(".lb-tier-del");
+  if (!del || del.disabled) return;
+  lbTiers.splice(Number(del.dataset.i), 1); lbRenderTiers();
+});
+document.getElementById("lb-tier-add")?.addEventListener("click", () => {
+  const last = lbTiers[lbTiers.length - 1];
+  lbTiers.push({ from: (last ? last.to : 0) + 1, to: (last ? last.to : 0) + 10, amount: last ? last.amount : 100 }); lbRenderTiers();
+});
+document.getElementById("lb-tier-default")?.addEventListener("click", () => { lbTiers = LB_DEFAULT_TIERS.map((t) => ({ ...t })); lbRenderTiers(); });
+document.getElementById("lb-budget")?.addEventListener("input", lbPaintTierSummary);
+lbRenderTiers();
+
+async function loadLeaderboard() {
+  const list = document.getElementById("lb-list");
+  try {
+    const { campaigns } = await api("/api/admin/leaderboard/campaigns");
+    lbCampaigns = campaigns;
+    if (!campaigns.length) { list.innerHTML = emptyState("★", "No campaigns yet. Create the first one."); return; }
+    list.innerHTML = campaigns.map((c) => {
+      const open = c.phase === "scheduled" || c.phase === "active";
+      const extendable = open || c.phase === "ended";
+      return recordCard({
+        id: c.id,
+        title: escapeHtml(c.name),
+        statusHtml: `<span class="status-pill">${escapeHtml(LB_PHASE[c.phase] || c.phase)}</span>`,
+        meta: [`${escapeHtml(c.starts_local.replace("T", " "))} → ${escapeHtml(c.ends_local.replace("T", " "))} (${escapeHtml(c.timezone)})`, `${money(c.budget_etb)} · ${c.winners_count} winners${c.reward_tiers ? " · rank ladder" : ""}`, `${c.points_per_cartela} pts/cartela · ${c.wagering_multiplier}× wagering`, c.channel_enabled ? `Channel @${escapeHtml(c.channel_username)} +${c.channel_points}` : "No channel reward"],
+        actionsHtml: `<div class="rc-actions">
+          <button class="btn" data-action="lb-detail" data-id="${c.id}">Standings &amp; rewards</button>
+          ${extendable ? `<button class="btn" data-action="lb-extend" data-id="${c.id}">Extend end date</button>` : ""}
+          ${open ? `<button class="btn" data-action="lb-edit" data-id="${c.id}">Edit</button><button class="btn btn-delete" data-action="lb-cancel" data-id="${c.id}">Cancel campaign</button>` : ""}
+        </div>`,
+      });
+    }).join("");
+  } catch (err) { list.innerHTML = `<p class="muted">Could not load campaigns: ${escapeHtml(err.message)}</p>`; }
+}
+
+function lbFormValues() {
+  const num = (id) => document.getElementById(id).value.trim();
+  return {
+    name: num("lb-name"), timezone: num("lb-tz"), starts_at: num("lb-start"), ends_at: num("lb-end"),
+    budget_etb: Number(num("lb-budget")), winners_count: Number(num("lb-winners")), points_per_cartela: Number(num("lb-points")),
+    reward_tiers: lbTiers.length ? lbTiers.map((t) => ({ from: t.from, to: Number(t.to), amount: Number(t.amount) })) : null,
+    wagering_multiplier: Number(num("lb-wager")), channel_enabled: document.getElementById("lb-channel-on").checked,
+    channel_username: num("lb-channel"), channel_points: Number(num("lb-channel-points")),
+  };
+}
+
+function lbResetForm() {
+  document.getElementById("lb-form").reset();
+  document.getElementById("lb-id").value = "";
+  document.getElementById("lb-tz").value = "Africa/Addis_Ababa";
+  document.getElementById("lb-budget").value = "100000"; document.getElementById("lb-winners").value = "250";
+  lbTiers = LB_DEFAULT_TIERS.map((t) => ({ ...t })); lbTiersLocked = false; lbRenderTiers();
+  document.getElementById("lb-points").value = "10"; document.getElementById("lb-wager").value = "37"; document.getElementById("lb-channel-points").value = "50";
+  document.getElementById("lb-form-title").textContent = "New campaign";
+  document.getElementById("lb-save").textContent = "Create campaign";
+  document.getElementById("lb-reset").classList.add("hidden");
+  ["lb-budget", "lb-winners", "lb-points", "lb-wager", "lb-start"].forEach((id) => { document.getElementById(id).disabled = false; });
+}
+
+function lbEdit(id) {
+  const c = lbCampaigns.find((x) => x.id === id);
+  if (!c) return;
+  document.getElementById("lb-id").value = c.id;
+  document.getElementById("lb-name").value = c.name; document.getElementById("lb-tz").value = c.timezone;
+  document.getElementById("lb-start").value = c.starts_local; document.getElementById("lb-end").value = c.ends_local;
+  document.getElementById("lb-budget").value = c.budget_etb; document.getElementById("lb-winners").value = c.winners_count;
+  document.getElementById("lb-points").value = c.points_per_cartela; document.getElementById("lb-wager").value = c.wagering_multiplier;
+  document.getElementById("lb-channel-on").checked = !!c.channel_enabled; document.getElementById("lb-channel").value = c.channel_username ? `@${c.channel_username}` : "";
+  document.getElementById("lb-channel-points").value = c.channel_points;
+  const running = c.phase === "active";   // once points are being earned, only name / end / channel reward can change
+  lbTiers = (c.reward_tiers || []).map((t) => ({ ...t })); lbTiersLocked = running; lbRenderTiers();
+  if (!lbTiers.length) document.getElementById("lb-winners").value = c.winners_count;
+  ["lb-budget", "lb-winners", "lb-points", "lb-wager", "lb-start"].forEach((f) => { document.getElementById(f).disabled = running; });
+  document.getElementById("lb-form-title").textContent = running ? "Edit running campaign" : "Edit campaign";
+  document.getElementById("lb-save").textContent = "Save changes";
+  document.getElementById("lb-reset").classList.remove("hidden");
+  document.getElementById("lb-form").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+document.getElementById("lb-reset")?.addEventListener("click", lbResetForm);
+document.getElementById("lb-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("lb-id").value;
+  const body = lbFormValues();
+  if (id) { ["budget_etb", "winners_count", "points_per_cartela", "wagering_multiplier", "starts_at"].forEach((k) => { if (document.getElementById({ budget_etb: "lb-budget", winners_count: "lb-winners", points_per_cartela: "lb-points", wagering_multiplier: "lb-wager", starts_at: "lb-start" }[k]).disabled) delete body[k]; }); }
+  if (id && lbTiersLocked) delete body.reward_tiers;
+  try {
+    await api(id ? `/api/admin/leaderboard/campaigns/${id}` : "/api/admin/leaderboard/campaigns", { method: id ? "PUT" : "POST", body: JSON.stringify(body) });
+    toast(id ? "Campaign updated" : "Campaign created", "success");
+    lbResetForm();
+    await loadLeaderboard();
+  } catch (err) { toast(err.message, "error"); }
+});
+
+async function lbOpenDetail(id) {
+  const panel = document.getElementById("lb-detail-panel"), box = document.getElementById("lb-detail");
+  panel.classList.remove("hidden");
+  box.innerHTML = '<div class="loader" style="margin:1rem auto"></div>';
+  try {
+    const d = await api(`/api/admin/leaderboard/campaigns/${id}`);
+    const c = d.campaign;
+    document.getElementById("lb-detail-title").textContent = c.name;
+    document.getElementById("lb-detail-sub").textContent = `${LB_PHASE[c.phase] || c.phase} · ${d.participants} players with points`;
+    const rows = (arr, cols) => arr.length ? `<div class="table-scroll"><table class="data-table"><thead><tr>${cols.map((x) => `<th>${x[0]}</th>`).join("")}</tr></thead><tbody>${arr.map((r) => `<tr>${cols.map((x) => `<td>${x[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : '<p class="muted small">Nothing yet.</p>';
+    let decision = "";
+    if (c.phase === "ended") {
+      decision = `<div class="work-panel"><h4>Reward distribution</h4>
+        <p class="muted small">${c.reward_tiers ? `If you approve, every winner is paid the amount of their rank band (${money(d.preview_total)} for the current standings, out of a ${money(c.budget_etb)} budget).` : `If you approve, the top ${c.winners_count} share ${money(c.budget_etb)} in proportion to their points (${money(d.preview_total)} for the current standings).`} Rewards go to the bonus balance (play-only). After ${c.wagering_multiplier}× wagering, the winnings made from bonus play become withdrawable. It is all winners or nobody: nothing is paid unless you approve.</p>
+        <div class="rc-actions"><button class="btn" data-action="lb-extend" data-id="${c.id}">Extend end date</button><button class="btn btn-approve" data-action="lb-approve" data-id="${c.id}">Approve &amp; distribute</button><button class="btn btn-delete" data-action="lb-reject" data-id="${c.id}">Reject (pay nothing)</button></div></div>`;
+    } else if (c.phase === "distributed") {
+      decision = `<p class="muted small">Approved ${c.decided_at ? new Date(c.decided_at).toLocaleString() : ""} · ${money(c.total_distributed)} distributed.</p>`;
+    } else if (c.phase === "rejected") {
+      decision = `<p class="muted small">Rejected${c.decision_note ? `: ${escapeHtml(c.decision_note)}` : ""}. No rewards were paid.</p>`;
+    }
+    const money0 = (n) => money(n);
+    box.innerHTML = `${decision}
+      <h4>Standings (top ${d.standings.length})</h4>
+      ${rows(d.standings, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Cartelas", (r) => r.cartelas], ["Reserved", (r) => money(r.reserved_etb)], ["Channel", (r) => r.channel_points], ["Points", (r) => `<b>${r.points}</b>`]])}
+      ${d.rewards.length ? `<h4>Rewards</h4>${rows(d.rewards, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Reward", (r) => money0(r.amount)], ["Wagering", (r) => `${r.wagered}/${r.wager_required} (${r.percent}%)`], ["Won from bonus", (r) => money0(r.bonus_won)], ["Status", (r) => r.status === "released" ? `Unlocked · ${money0(r.released)} withdrawable` : "Wagering"]])}` : (d.preview.length ? `<h4>Reward preview</h4>${rows(d.preview, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Points", (r) => r.points], ["Reward", (r) => money0(r.amount)]])}` : "")}
+      <h4>Channel reward claims</h4>
+      ${rows(d.channel_claims, [["Player", (r) => escapeHtml(r.display_name || r.player_id)], ["Points", (r) => r.points], ["When", (r) => new Date(r.created_at).toLocaleString()], ["", (r) => r.revoked ? "Revoked" : `<button class="btn btn-delete" data-action="lb-revoke" data-id="${r.id}">Revoke</button>`]])}
+      ${d.failed_attempts.length ? `<h4>Unsuccessful verifications</h4>${rows(d.failed_attempts, [["Player", (r) => escapeHtml(r.display_name || r.player_id)], ["Result", (r) => escapeHtml(r.result)], ["Detail", (r) => escapeHtml(r.detail || "")], ["When", (r) => new Date(r.created_at).toLocaleString()]])}` : ""}`;
+    box.dataset.campaign = id;
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (err) { box.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`; }
+}
+
+async function leaderboardAction(action, id, btn, actionsDiv) {
+  const reenable = () => { if (actionsDiv) actionsDiv.querySelectorAll("button").forEach((b) => { b.disabled = false; }); };
+  if (action === "lb-edit") { lbEdit(id); return reenable(); }
+  if (action === "lb-detail") { await lbOpenDetail(id); return reenable(); }
+  if (action === "lb-extend") {
+    const c = lbCampaigns.find((x) => x.id === id);
+    const raw = window.prompt(`New end date and time (${c ? c.timezone : "campaign timezone"}), later than ${c ? c.ends_local.replace("T", " ") : "the current end"}.\nFormat: 2026-12-05 21:00`, c ? c.ends_local.replace("T", " ") : "");
+    if (raw === null) return reenable();
+    try {
+      await api(`/api/admin/leaderboard/campaigns/${id}/extend`, { method: "POST", body: JSON.stringify({ ends_at: raw.trim().replace(" ", "T") }) });
+      toast("End date extended", "success");
+    } catch (err) { toast(err.message, "error"); reenable(); return; }
+    await loadLeaderboard();
+    if (document.getElementById("lb-detail")?.dataset.campaign === id) await lbOpenDetail(id);
+    return;
+  }
+  if (action === "lb-cancel") {
+    if (!window.confirm("Cancel this campaign? Points stop being counted and nothing is paid.")) return reenable();
+    await api(`/api/admin/leaderboard/campaigns/${id}/cancel`, { method: "POST", body: "{}" });
+    toast("Campaign cancelled", "success"); return loadLeaderboard();
+  }
+  if (action === "lb-approve") {
+    if (!window.confirm("Approve and pay the leaderboard rewards now? This cannot be undone.")) return reenable();
+    const r = await api(`/api/admin/leaderboard/campaigns/${id}/approve`, { method: "POST", body: "{}" });
+    toast(`Distributed ${r.total_distributed} ETB to ${r.winners} winners`, "success");
+    refreshAttention();
+    await loadLeaderboard(); return lbOpenDetail(id);
+  }
+  if (action === "lb-reject") {
+    const note = window.prompt("Reason (optional). No rewards will be paid:", "");
+    if (note === null) return reenable();
+    await api(`/api/admin/leaderboard/campaigns/${id}/reject`, { method: "POST", body: JSON.stringify({ note: note.trim() }) });
+    toast("Distribution rejected", "success");
+    refreshAttention();
+    await loadLeaderboard(); return lbOpenDetail(document.getElementById("lb-detail").dataset.campaign || id);
+  }
+  if (action === "lb-revoke") {
+    if (!window.confirm("Revoke these channel points? The player cannot claim again in this campaign.")) return reenable();
+    await api(`/api/admin/leaderboard/points/${id}/revoke`, { method: "POST", body: "{}" });
+    toast("Claim revoked", "success"); return lbOpenDetail(document.getElementById("lb-detail").dataset.campaign);
+  }
+}
+
+
+/* ===========================================================================
+   Attention badges: red counts on tabs that have something waiting for a decision
+   =========================================================================== */
+function setTabBadge(tab, count) {
+  document.querySelectorAll(`[data-tab="${tab}"]`).forEach((el) => {
+    let b = el.querySelector(".attn-badge");
+    if (!count) { b?.remove(); return; }
+    if (!b) { b = document.createElement("span"); b.className = "attn-badge"; b.setAttribute("aria-label", "waiting for review"); el.appendChild(b); }
+    b.textContent = count > 99 ? "99+" : String(count);
+  });
+}
+
+async function refreshAttention() {
+  if (!state.isSuperAdmin) return;
+  try {
+    const a = await api("/api/admin/attention");
+    setTabBadge("leaderboard", a.leaderboard);
+    setTabBadge("agents", a.agents);
+  } catch (e) { /* badges are a convenience; try again next tick */ }
+}
+setInterval(() => { if (!document.hidden) refreshAttention(); }, 30000);
+setTimeout(refreshAttention, 4000);

@@ -48,4 +48,3 @@ async def test_shutdown_stops_reacquiring(pg):
         assert await _as("B", "draw:r4", 30) is True   # our lease was handed over
     finally:
         ll._shutting_down = False
-        ll._shutdown_holder = None

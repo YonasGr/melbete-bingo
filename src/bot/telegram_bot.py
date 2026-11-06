@@ -5,7 +5,7 @@ Handles registration (just sharing their phone/contact - real/payment name
 is collected later, only when they deposit or withdraw), the wallet
 (balance, top-up with screenshot -> admin approval, one-time free credit),
 and launching the live global game (the HTML5 Mini App at `/app`). Gameplay
-itself happens in the Mini App, which talks to the same Firestore data via
+itself happens in the Mini App, which talks to the same Postgres data via
 the FastAPI backend (`src/api/main.py`).
 """
 import asyncio
@@ -75,8 +75,8 @@ class MelbeteBingoBot:
 
     @property
     def players(self) -> PlayerRepository:
-        # Created lazily so importing this module never requires live
-        # Firestore credentials (useful for tests/tooling).
+        # Created lazily so importing this module never requires a
+        # live database connection (useful for tests/tooling).
         if self._players is None:
             self._players = PlayerRepository()
         return self._players

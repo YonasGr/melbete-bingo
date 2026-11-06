@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="/static/css/melbete-footer.css?v={{ APP_VERSION }}">
 <link rel="stylesheet" href="/static/css/melbete-cosmic.css?v={{ APP_VERSION }}">
 <link rel="stylesheet" href="/static/css/melbete-roundA.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-payflow.css?v={{ APP_VERSION }}">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png">
   <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
 </head>
@@ -29,6 +30,10 @@
     <div class="topbar-brand">
       <span class="logo-shine"><picture><source srcset="/static/img/melbete-bingo-logo.webp" type="image/webp"><img src="/static/img/melbete-bingo-logo.png" alt="Melbete Bingo" class="brand-logo-img"></picture><i class="melbete-sheen"></i></span>
     </div>
+    <button id="balance-btn" class="header-balance" type="button" title="Tap for transaction history" aria-label="Available balance. Tap for transaction history">
+      <span class="balance-label" data-i18n="bal_label">Available balance</span>
+      <span class="wallet-amount"><strong id="balance-real">0</strong> <small>ETB</small></span>
+    </button>
     <div class="topbar-actions">
     <button id="lang-toggle-btn" class="lang-toggle" type="button" aria-label="Change language">EN</button>
     <button id="header-profile-btn" class="header-profile-btn" type="button" aria-label="Open profile">
@@ -50,29 +55,15 @@
       <div class="melbete-splash" aria-hidden="true">
         <span class="mb-splash-sky"></span><span class="mb-orbit"><i></i><i></i></span>
         <span class="melbete-splash-logo"><img src="/static/img/melbete-bingo-logo.png" alt=""><i class="melbete-sheen"></i></span>
-        <span class="melbete-splash-bar"><i></i></span>
         <p class="mb-splash-tag" data-i18n="splash_tag">Play. Win. Cash out.</p>
       </div>
     </div>
 
     <!-- The game selection hub itself -->
     <div id="game-select-view" class="view">
-      <section class="wallet-summary" aria-label="Wallet summary">
-        <button id="balance-btn" class="wallet-balance" title="Tap for transaction history" aria-label="Balance. Tap for transaction history">
-          <span class="balance-label" data-i18n="bal_label">Available balance</span>
-          <span class="wallet-amount"><strong id="balance-real">0</strong> <small>ETB</small></span>
-          <span class="history-hint" data-i18n="view_history">View history</span>
-        </button>
-        <div class="wallet-quick-actions">
-          <button id="quick-deposit-btn" class="wallet-action wallet-action-primary" type="button">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5M12 5L6.5 10.5M12 5l5.5 5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="deposit">ገንዘብ ያስገቡ</span>
-          </button>
-          <button id="quick-withdraw-btn" class="wallet-action" type="button">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14m0 0l-5.5-5.5M12 19l5.5-5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-i18n="withdraw">ገንዘብ ያውጡ</span>
-          </button>
-        </div>
-      </section>
       <section id="deposit-timeline" class="deposit-timeline hidden" aria-live="polite" aria-label="Deposit status"></section>
+      <button id="lb-strip" class="lb-strip hidden" type="button" aria-label="Leaderboard"></button>
+      <button id="rejoin-banner" class="rejoin-banner hidden" type="button"></button>
       <section id="cartela-quick-picker" class="quick-picker hidden" aria-label="Pick a cartela"></section>
       <div class="game-list-heading">
         <div><h1 data-i18n="play_title">Play Bingo</h1><p data-i18n="play_sub">Join a live Bingo round.</p></div>
@@ -99,6 +90,7 @@
     </button>
     <button id="hub-tab-promos" class="hub-tab-btn" aria-label="Promotions">
       <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M12 9v11M3.5 9h17v-2.5a1 1 0 00-1-1h-15a1 1 0 00-1 1V9z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 5.5C12 4 10.8 3 9.6 3a1.8 1.8 0 000 3.6M12 5.5C12 4 13.2 3 14.4 3a1.8 1.8 0 010 3.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_promos">Promos</span>
+      <span id="hub-streak" class="tab-streak hidden" aria-hidden="true"></span>
       <span id="hub-badge-promos" class="tab-badge hidden">0</span>
     </button>
     <button id="hub-tab-deposit" class="hub-tab-btn hub-tab-center" aria-label="ገንዘብ ማስገቢያ">
@@ -106,6 +98,7 @@
       <span id="hub-dot-deposit" class="tab-dot hidden" title="Deposit under review"></span>
     </button>
     <button id="hub-tab-withdraw" class="hub-tab-btn" aria-label="ገንዘብ ማውጫ">
+      <span id="hub-withdrawable" class="tab-withdrawable" title="Withdrawable balance">0</span>
       <span class="hub-tab-icon"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5V19M12 19L6 13M12 19L18 13" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="hub-tab-label" data-i18n="tab_withdraw">ማውጫ</span>
     </button>
     <button id="hub-tab-profile" class="hub-tab-btn" aria-label="Profile">
@@ -168,6 +161,12 @@
     <div class="modal-content payment-modal">
       <button class="modal-close" data-close="withdraw-modal" aria-label="ዝጋ">&times;</button>
       <h3 id="withdraw-modal-title" data-i18n="wd_title">🏧 ገንዘብ ማውጫ</h3>
+      <div class="withdraw-balance-box" aria-live="polite">
+        <span class="wbb-label" data-i18n="wd_box_title">Withdrawable balance</span>
+        <span class="wbb-amount"><strong id="withdraw-balance-value">0</strong> <small data-i18n="chip_etb">ETB</small></span>
+        <span class="wbb-note" data-i18n="wd_box_note">Only your winnings can be withdrawn.</span>
+      </div>
+      <button id="withdraw-deposit-btn" class="primary-btn hidden" type="button">Deposit to play</button>
       <p class="muted small" id="withdraw-limits"></p>
 
       <div class="payment-step">
@@ -190,7 +189,7 @@
         <label for="withdraw-legal-name" class="field-label" data-i18n="wd_legal">በመክፈያ ሂሳቡ ላይ የተመዘገበው ሙሉ ስም</label>
         <input id="withdraw-legal-name" type="text" placeholder="በሂሳቡ ላይ እንደተመዘገበው በትክክል ያስገቡ" data-i18n-ph="wd_legal_ph" />
         <label for="withdraw-amount" class="field-label" data-i18n="wd_amount">የሚያወጡት የገንዘብ መጠን (ብር)</label>
-        <input id="withdraw-amount" type="number" inputmode="numeric" placeholder="ለምሳሌ፦ 300" data-i18n-ph="wd_amount_ph" />
+        <div class="amount-row"><input id="withdraw-amount" type="number" inputmode="numeric" placeholder="ለምሳሌ፦ 300" data-i18n-ph="wd_amount_ph" /><button id="withdraw-max-btn" class="secondary-btn amount-max" type="button" data-i18n="wd_max">Max</button></div>
         <button id="withdraw-submit-btn" class="primary-btn" data-i18n="wd_submit">ገንዘብ ለማውጣት ጥያቄ ይላኩ</button>
       </div>
       <p class="muted small center-text" data-i18n="wd_foot">የገንዘብ ማውጣት ጥያቄዎችን አስተዳዳሪ ይመረምራል፤ ከተረጋገጠ በኋላም ክፍያውን በእጅ ይፈጽማል።</p>
@@ -226,6 +225,7 @@
     <div class="modal-content">
       <button class="modal-close" data-close="history-modal" aria-label="Close">&times;</button>
       <h3 id="history-modal-title">📜 Transaction History</h3>
+      <div id="wallet-breakdown" class="wallet-breakdown" aria-label="Wallet"></div>
       <div id="history-list" class="history-list"></div>
     </div>
   </div>
@@ -311,6 +311,8 @@
   <div id="toast" class="toast hidden"></div>
 </div>
 
+<script src="/static/js/melbete-net.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-core.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/melbete-i18n.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/gameselect.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/inbox.js?v={{ APP_VERSION }}"></script>
@@ -318,5 +320,6 @@
 <script src="/static/js/melbete-control.js?v={{ APP_VERSION }}" defer></script>
 <script src="/static/js/melbete-progress.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/melbete-roundA.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-payflow.js?v={{ APP_VERSION }}"></script>
 </body>
 </html>

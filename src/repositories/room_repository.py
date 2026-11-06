@@ -94,6 +94,15 @@ class RoomRepository(BaseRepository):
             finally:
                 await conn.execute("SELECT pg_advisory_unlock(hashtext($1))", f"bingo-room:{room_id}")
 
+    async def running_for_player(self, player_id: str) -> Optional[GameRoom]:
+        row = await self._fetchrow(
+            "SELECT r.* FROM game_rooms r WHERE r.state = 'running' AND EXISTS "
+            "(SELECT 1 FROM cards c WHERE c.room_id = r.id AND c.owner_id = $1 AND c.funded_by <> 'unfunded') "
+            "ORDER BY r.created_at DESC LIMIT 1",
+            player_id,
+        )
+        return GameRoom(**row) if row else None
+
     async def list_recent(self, limit: int = 50, state_filter: Optional[str] = None) -> List[GameRoom]:
         """Most recent rounds (any state) - powers the admin panel's Games
         tab (who won, which cartela, how much)."""

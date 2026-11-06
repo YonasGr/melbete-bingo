@@ -2,9 +2,8 @@
 """
 Melbete Bingo - Main Entry Point
 
-Runs the Telegram bot and/or the FastAPI server. Persistence is Cloud
-Firestore (see src/core/firebase.py) - there is no local database to
-initialize before starting.
+Runs the Telegram bot and/or the FastAPI server. Persistence is Postgres
+(see src/core/db.py); apply supabase/migrations before first start.
 
 Usage:
     python main.py            # run bot + API together

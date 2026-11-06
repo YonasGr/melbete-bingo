@@ -82,6 +82,38 @@ async def agent_me(
     }
 
 
+@router.get("/application")
+async def agent_my_application(
+    player_id: str = Query(...),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+):
+    """The player's latest 'become an agent' request (or null) - drives the profile screen."""
+    await _auth(player_id, x_telegram_init_data)
+    app = await get_agent_service().my_application(player_id)
+    if not app:
+        return {"application": None}
+    return {"application": {
+        "status": app["status"], "note": app.get("note", ""), "review_note": app.get("review_note", ""),
+        "created_at": app["created_at"].isoformat(),
+    }}
+
+
+@router.post("/apply")
+async def agent_apply(
+    player_id: str = Query(...),
+    payload: dict = Body(default={}),
+    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+):
+    """A player asks to become an agent; an admin approves or rejects it in the Agents tab."""
+    await _auth(player_id, x_telegram_init_data)
+    enforce_rate_limit("agent_apply", player_id)
+    try:
+        app = await get_agent_service().apply(player_id, (payload or {}).get("note", ""))
+    except AgentError as e:
+        raise _http(e)
+    return {"message": "Request sent - an admin will review it soon", "status": app["status"]}
+
+
 @router.get("/players")
 async def agent_players(
     player_id: str = Query(...),

@@ -14,8 +14,8 @@ Two balances per wallet:
   thumb on the scale of any game. Every draw uses the same fair RNG for
   every player, bonus-funded or not.
 
-When a stake is charged in the single real-money room, real balance is spent
-first, then bonus credit covers any remainder (the published deterministic
+When a stake is charged in the single real-money room, bonus credit is spent
+first, then real balance covers any remainder (the published deterministic
 funding rule). Whichever pool funded a card determines where
 its winnings land: bonus-funded cards pay out to bonus_balance (still
 locked), real-funded cards pay out to the real, withdrawable balance.
@@ -90,7 +90,7 @@ class WalletService:
 
     async def _limits(self):
         """Runtime-configurable limits, falling back to .env defaults if
-        the admin has never touched settings yet (or Firestore isn't
+        the admin has never touched settings yet (or the settings table isn't
         reachable, e.g. in unit tests using fakes)."""
         try:
             return await self.settings_repo.get_or_create()
@@ -291,6 +291,7 @@ class WalletService:
                 return approved
         except Exception:  # noqa: BLE001 - a failed auto-approve simply leaves the deposit for a human
             logger.exception("Auto-approve failed for deposit %s; left pending", txn.id)
+        self._notify_player(txn.player_id, "deposit_received", {"amount": txn.amount}, f"deposit_received:{txn.id}")
         return txn
 
     async def _resolve_admin_label(self, admin_id: str) -> str:
@@ -364,6 +365,28 @@ class WalletService:
             logger.exception("Agent commission failed for deposit %s; cash deposit stays approved", txn.id)
             return None
 
+    @staticmethod
+    def _notify_player(player_id: str, type_: str, data: dict, dedupe_key: str) -> None:
+        """Tell the player (inbox + Telegram) that a request was received. Fire-and-forget, never raises."""
+        try:
+            from src.services import player_notifications as pn
+
+            pn.schedule_notify(player_id, type_, data, dedupe_key=dedupe_key)
+        except Exception:  # noqa: BLE001 - a notification must never affect a deposit or withdrawal
+            logger.warning("Could not schedule %s for %s", type_, player_id, exc_info=True)
+
+    async def _audit_decision(self, source: str, admin_id: str, action: str, txn: Transaction) -> None:
+        """Audit-log a decision made from the Telegram bot. Web-panel decisions are logged by the admin router
+        (which also has the caller's IP); the bot has no router in front of it, so it is logged here, and only
+        when the decision was actually applied (a repeated tap on an already-resolved request is a no-op)."""
+        if source != "bot":
+            return
+        await self._control().audit(
+            admin_id, action, target_type="transaction", target_id=txn.id,
+            summary=f"{abs(txn.amount)} ETB for {txn.player_id} (via Telegram bot)",
+            after={"status": txn.status, "amount": abs(txn.amount), "source": "bot", "note": txn.note},
+        )
+
     async def approve_topup(self, transaction_id: str, admin_id: str, source: str = "web") -> Transaction:
         # One database transaction with row locks: concurrent approvals credit once,
         # and the first-deposit reward commits atomically with the cash credit.
@@ -377,6 +400,7 @@ class WalletService:
         txn = result.txn
         if not result.applied:
             return txn  # already resolved (or not a deposit): nothing credited here
+        await self._audit_decision(source, admin_id, "deposit.approve", txn)
         reward = result.extra or {}
         bonus_note = ""
         if reward.get("status") == "granted":
@@ -418,6 +442,8 @@ class WalletService:
         )
         txn.type = "top_up_rejected"
         txn.status = "rejected"
+        txn.note = note
+        await self._audit_decision(source, admin_id, "deposit.reject", txn)
         await self._sync_notification(txn, "❌", "Deposit rejected", admin_id, source, note or "")
         from src.services import player_notifications as pn
 
@@ -513,6 +539,7 @@ class WalletService:
             )
         except Exception:  # noqa: BLE001 - an alert problem must never fail a withdrawal
             logger.warning("Withdrawal alert skipped for %s", txn.id, exc_info=True)
+        self._notify_player(player_id, "withdrawal_received", {"amount": abs(txn.amount)}, f"withdrawal_received:{txn.id}")
         return txn
 
     async def approve_withdrawal(self, transaction_id: str, admin_id: str, source: str = "web") -> Transaction:
@@ -524,6 +551,7 @@ class WalletService:
             raise TransactionNotFoundError(transaction_id)
         if not applied:
             return txn
+        await self._audit_decision(source, admin_id, "withdrawal.reject" if txn.status == "rejected" else "withdrawal.approve", txn)
         from src.services import player_notifications as pn
 
         if txn.status == "rejected":  # legacy bonus-only request auto-converted to a refund
@@ -541,6 +569,7 @@ class WalletService:
             raise TransactionNotFoundError(transaction_id)
         if not applied:
             return txn
+        await self._audit_decision(source, admin_id, "withdrawal.reject", txn)
         await self._sync_notification(txn, "❌", "Withdrawal rejected & refunded", admin_id, source, note or "")
         from src.services import player_notifications as pn
 
@@ -679,6 +708,8 @@ class WalletService:
         wallet = await self.wallet_repo.apply_delta(
             player_id, balance=real_amount, won=real_amount, bonus=bonus_amount
         )
+        if bonus_amount > 0:
+            await self._note_bonus_win(player_id, bonus_amount)
         await self.transaction_repo.create(
             Transaction(
                 player_id=player_id,
@@ -691,6 +722,15 @@ class WalletService:
             )
         )
         return wallet
+
+    async def _note_bonus_win(self, player_id: str, amount: int) -> None:
+        """Remember winnings from bonus play for a locked leaderboard reward. Bookkeeping only - never blocks a payout."""
+        try:
+            from src.repositories.leaderboard_repository import LeaderboardRepository
+
+            await LeaderboardRepository().add_bonus_won(player_id, amount)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not record bonus winnings for leaderboard wagering (player %s)", player_id)
 
     async def admin_adjust(self, player_id: str, amount: int, admin_id: str, note: str = "") -> Wallet:
         """Manual balance correction by an admin (e.g. reconciling a

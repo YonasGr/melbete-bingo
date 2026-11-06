@@ -51,7 +51,6 @@ class EngagementService:
         self._notify = notify
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
         self._last_nudge_batch: dict[str, datetime] = {}
-        self._recent_room_players: dict[str, tuple[datetime, set[str]]] = {}
 
     # -- plumbing ----------------------------------------------------------------------------
 
@@ -96,6 +95,22 @@ class EngagementService:
                     self.notify(pid, "streak_reward", {"days": streak, "amount": amount}, dedupe_key=f"streak:{pid}:{day}:{streak}")
             except Exception:  # noqa: BLE001 - one player's failure must not stop the others
                 logger.exception("Could not record play / streak for %s", pid)
+            await self._low_balance_nudge(pid, now, day)
+
+    async def _low_balance_nudge(self, pid: str, now: datetime, day: date) -> None:
+        """After a round: if the player can no longer afford another cartela, say so - at most once per EAT
+        day (the notification's dedupe key), never in quiet hours, and never to players who muted promos
+        (PlayerNotifier drops promo types for them). Never raises: it must not affect a round."""
+        threshold = int(getattr(self.cfg, "engagement_low_balance_threshold_etb", 0) or 0)
+        if threshold <= 0 or self.in_quiet_hours(now):
+            return
+        try:
+            wallet = await self.wallets.get_or_create_wallet(pid)
+            total = int(wallet.balance) + int(getattr(wallet, "bonus_balance", 0) or 0)
+            if total < threshold:
+                self.notify(pid, "low_balance", {"balance": total, "threshold": threshold}, dedupe_key=f"low_balance:{pid}:{day}")
+        except Exception:  # noqa: BLE001
+            logger.exception("Low-balance check failed for %s", pid)
 
     # -- "round starting" nudge --------------------------------------------------------------
 
@@ -110,13 +125,9 @@ class EngagementService:
         if last and now - last < timedelta(minutes=cfg.engagement_nudge_batch_gap_minutes):
             return 0
         self._last_nudge_batch[track] = now
-        recent = self._recent_room_players.get(track)
-        prior_players = set(recent[1]) if recent and now - recent[0] < timedelta(hours=24) else set()
-        if players_in_room:
-            self._recent_room_players[track] = (now, set(players_in_room))
         candidates = await self.repo.nudge_candidates(
             now - timedelta(days=14), now - timedelta(hours=cfg.engagement_nudge_cooldown_hours),
-            list(set(players_in_room) | prior_players), cfg.engagement_nudge_max_recipients,
+            list(players_in_room), cfg.engagement_nudge_max_recipients,
         )
         cutoff = now - timedelta(hours=cfg.engagement_nudge_cooldown_hours)
         sent = 0

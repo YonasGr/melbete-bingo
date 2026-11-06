@@ -29,3 +29,5 @@ mypy==1.7.1
 # Azure Storage
 azure-storage-blob==12.19.0
 redis==5.0.8  # optional: cross-container WebSocket fan-out (REDIS_URL)
+
+tzdata>=2024.1   # IANA timezones for leaderboard campaigns on slim images
