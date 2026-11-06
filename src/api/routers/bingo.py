@@ -299,6 +299,7 @@ async def select_cartela(
             )
         raise HTTPException(status_code=402, detail="Insufficient balance - please deposit to join")
 
+    player_count = await _player_count_in_room(room_id)
     asyncio.create_task(_broadcast_cartela_picked(room_id, player_id, cartela_number, room.taken_cartelas))
 
     # The 30s countdown only exists once the lobby holds the minimum number
@@ -312,7 +313,7 @@ async def select_cartela(
     return {
         "message": "Cartela reserved",
         "card": {"id": card.id, "grid": card.grid, "variant": card.variant, "cartela_number": card.cartela_number},
-        "room": await _room_summary(room),
+        "room": await _room_summary(room, player_count),
     }
 
 

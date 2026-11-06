@@ -1132,7 +1132,7 @@ async def test_a_failing_engagement_hook_never_affects_the_round(service):
 
 
 @pytest.mark.asyncio
-async def test_countdown_starts_at_min_cartelas_even_for_one_player(service):
+async def test_countdown_waits_for_two_distinct_players_regardless_of_cartelas(service):
     await service.settings_repo.update({"min_cartelas_to_start": 3})
     room = await service.get_or_create_waiting_session()
     assert room.min_cartelas_to_start == 3
@@ -1141,8 +1141,10 @@ async def test_countdown_starts_at_min_cartelas_even_for_one_player(service):
     assert room.countdown_started_at is None  # 2 cartelas: not enough yet
 
     room, _ = await service.select_cartela(room.id, "player-1", 3)
-    assert room.countdown_started_at is not None  # 3 cartelas, 1 player: clock starts
+    assert room.countdown_started_at is None  # one player never starts the clock
 
+    room, _ = await service.select_cartela(room.id, "player-2", 4)
+    assert room.countdown_started_at is not None
     started, dropped = await service.charge_and_start(room.id)
     assert dropped == []
     assert started is not None and started.state == "running"
@@ -1151,14 +1153,12 @@ async def test_countdown_starts_at_min_cartelas_even_for_one_player(service):
 
 @pytest.mark.asyncio
 async def test_releasing_below_minimum_stops_the_countdown(service):
-    await service.settings_repo.update({"min_cartelas_to_start": 3})
     room = await service.get_or_create_waiting_session()
-    for n in (1, 2):
-        room, _ = await service.select_cartela(room.id, "player-1", n)
-    room, card3 = await service.select_cartela(room.id, "player-1", 3)
+    room, _ = await service.select_cartela(room.id, "player-1", 1)
+    room, card2 = await service.select_cartela(room.id, "player-2", 2)
     assert room.countdown_started_at is not None
 
-    room = await service.release_cartela(room.id, "player-1", card_id=card3.id)
+    room = await service.release_cartela(room.id, "player-2", card_id=card2.id)
     assert room.countdown_started_at is None
 
 

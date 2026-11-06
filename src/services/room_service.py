@@ -410,12 +410,6 @@ class RoomService:
 
             taken = room.taken_cartelas + [cartela_number]
             fields = {"taken_cartelas": taken}
-            min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
-            if len(taken) >= min_cartelas and not room.countdown_started_at:
-                # The lobby has enough cartelas (they may all belong to one
-                # player) - the 30s clock starts now.
-                room.countdown_started_at = datetime.now(timezone.utc)
-                fields["countdown_started_at"] = room.countdown_started_at
 
             # Two independent writes to two different documents - same
             # reasoning as the reads above, run them together.
@@ -424,6 +418,13 @@ class RoomService:
                 self.rooms.update(room_id, fields),
             )
             room.taken_cartelas = taken
+            if not room.countdown_started_at:
+                room_cards = await self.cards.list_by_room(room_id)
+                if len({c.owner_id for c in room_cards}) >= 2:
+                    room.countdown_started_at = datetime.now(timezone.utc)
+                    await self.rooms.update(
+                        room_id, {"countdown_started_at": room.countdown_started_at}
+                    )
 
         return room, card
 
@@ -445,10 +446,10 @@ class RoomService:
             if card.cartela_number in room.taken_cartelas:
                 room.taken_cartelas.remove(card.cartela_number)
         fields = {"taken_cartelas": room.taken_cartelas}
-        min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
-        if len(room.taken_cartelas) < min_cartelas:
-            # Not enough cartelas any more - stop the clock; it restarts
-            # from the full 30s when the lobby reaches the minimum again.
+        room_cards = await self.cards.list_by_room(room_id)
+        if len({card.owner_id for card in room_cards}) < 2:
+            # A single player may hold multiple cartelas without starting
+            # the countdown.
             fields["countdown_started_at"] = None
             room.countdown_started_at = None
         await self.rooms.update(room_id, fields)
@@ -489,10 +490,8 @@ class RoomService:
 
         cards = await self.cards.list_by_room(room_id)
         s = await self.settings_repo.get_or_create()
-        required_cartelas = max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
-        if len(cards) < required_cartelas:
-            # Defensive: the lobby timer only runs with enough cartelas. Leave
-            # the lobby open (waiting) instead of cancelling it.
+        if len({card.owner_id for card in cards}) < 2:
+            # Defensive: never start a round with only one distinct player.
             return None, []
         charged_cartelas: list[int] = []
         charged_cards: list[tuple[Card, str]] = []
@@ -511,10 +510,9 @@ class RoomService:
                 dropped.append(card.owner_id)
 
         charged_players = {card.owner_id for card, _ in charged_cards}
-        if len(charged_cartelas) < required_cartelas:
-            # A player can lose balance during the countdown and drop below
-            # the minimum number of cartelas; restore every charged stake to
-            # its original pool and reset the lobby instead.
+        if len({card.owner_id for card, _ in charged_cards}) < 2:
+            # If one player drops out during charging, refund everyone and
+            # leave the lobby waiting for another distinct player.
             for card, funded_by in charged_cards:
                 await self.wallets.refund_stake(card.owner_id, room.stake_amount, room_id, funded_by)
             await self.cancel_round(room_id)

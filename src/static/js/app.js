@@ -403,11 +403,11 @@ function setLobbyLocked(locked) {
 }
 
 function lobbyStatusText(room) {
-  const min = room?.min_cartelas_to_start || 2;
   const taken = room?.taken_cartelas?.length || 0;
-  if (room?.countdown_started_at) return `${taken} cartela(s) reserved - the round starts when the countdown ends.`;
-  const need = Math.max(min - taken, 0);
-  return `${taken} of ${min} cartelas reserved. Reserve ${need} more to start the ${room?.countdown_seconds || 30}s countdown.`;
+  const players = room?.player_count || 0;
+  if (room?.countdown_started_at) return `${players} players joined - the round starts when the countdown ends.`;
+  if (players < 2) return `${players} player joined. Waiting for another player before the countdown starts.`;
+  return `${players} players joined with ${taken} cartela(s) reserved.`;
 }
 
 function renderCartelaPreview() {
@@ -1444,7 +1444,7 @@ function startCountdownBanner(seconds) {
   const deadline = Date.now() + Math.max(Number(seconds) || 0, 0) * 1000;
   const banner = document.getElementById("countdown-banner");
   banner.classList.remove("hidden");
-  document.getElementById("players-joined-count").textContent = state.room?.taken_cartelas?.length || 0;
+  document.getElementById("players-joined-count").textContent = state.room?.player_count || 0;
   let lastCueSecond = null;
   const tick = () => {
     const remainingMs = Math.max(deadline - Date.now(), 0);
