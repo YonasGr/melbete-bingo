@@ -1,36 +1,21 @@
-name: Deploy to Azure
-
-# Push to main -> run tests -> build the image in Azure Container Registry ->
-# roll the api and bot Container Apps to the new image.
-#
-# One-time setup (see docs/deployment.md, "CI/CD"): create the Azure resources with
-# scripts/deploy_azure.sh, then add an Entra app registration with a federated
-# credential for this repo (OIDC - no stored passwords) and set these on the
-# GitHub "production" environment:
-#   secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-#   vars:    AZURE_RESOURCE_GROUP (e.g. bingo-rg), NAME_PREFIX (e.g. melbetebingo)
+name: Deploy Melbete Bingo to AWS
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 permissions:
-  id-token: write   # OIDC login to Azure
   contents: read
 
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false   # never cancel a mid-flight deploy
+  group: melbete-bingo-production
+  cancel-in-progress: false
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────
-  # 1. Run tests
-  # ─────────────────────────────────────────────────────────────────────────
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    # Real Postgres so the wallet concurrency tests (src/tests/integration) actually run.
     services:
       postgres:
         image: postgres:16
@@ -47,75 +32,81 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-
+          cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Run test suite
         env:
           TELEGRAM_BOT_TOKEN: test
           DATABASE_URL: postgresql://test:test@localhost:5432/test
           TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
-          REQUIRE_INTEGRATION_DB: "1"   # fail (not skip) if the DB is unreachable in CI
+          REQUIRE_INTEGRATION_DB: "1"
           SECRET_KEY: test-secret-key-for-ci
         run: pytest
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # 2. Build in ACR and roll out to Container Apps
-  # ─────────────────────────────────────────────────────────────────────────
   deploy:
-    name: Deploy to Azure Container Apps
+    name: Deploy to shared AWS EC2 host
     needs: test
     runs-on: ubuntu-latest
     environment: production
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      DEPLOY_PATH: ~/melbete-bingo
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute image tag (short commit SHA)
-        id: vars
-        run: echo "image_tag=$(echo ${{ github.sha }} | cut -c1-12)" >> "$GITHUB_OUTPUT"
-
-      # Cache-bust static assets so browsers pick up each deploy immediately.
-      - name: Inject cache buster into HTML templates
+      - name: Configure SSH
         run: |
-          sed -i -E 's@(/static/(css|js)/[^"]+\.(css|js))(\?v=[a-zA-Z0-9_-]*)?@\1?v=${{ steps.vars.outputs.image_tag }}@g' src/templates/*.html || true
+          install -m 700 -d ~/.ssh
+          printf '%s\n' '${{ secrets.EC2_SSH_PRIVATE_KEY }}' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Fetch self-hosted fonts
-        run: bash scripts/fetch_fonts.sh || echo "::warning::fonts were not fetched; the app falls back to system fonts"
-
-      - name: Build image in ACR
-        id: acr
+      - name: Prepare production environment
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          SUPER_ADMIN_TELEGRAM_ID: ${{ secrets.SUPER_ADMIN_TELEGRAM_ID }}
+          ADMIN_TOTP_SECRETS: ${{ secrets.ADMIN_TOTP_SECRETS }}
+          ADMIN_TELEGRAM_IDS: ${{ secrets.ADMIN_TELEGRAM_IDS }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
         run: |
-          ACR=$(az acr list -g "${{ vars.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
-          echo "name=$ACR" >> "$GITHUB_OUTPUT"
-          az acr build -r "$ACR" -t "bingo-app:${{ steps.vars.outputs.image_tag }}" -t bingo-app:latest .
+          env_file="$(mktemp)"
+          {
+            printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
+            printf 'TELEGRAM_BOT_USERNAME=%s\n' "$TELEGRAM_BOT_USERNAME"
+            printf 'PUBLIC_BASE_URL=https://melbete.yonasgr.me\n'
+            printf 'SECRET_KEY=%s\n' "$SECRET_KEY"
+            printf 'SUPER_ADMIN_TELEGRAM_ID=%s\n' "$SUPER_ADMIN_TELEGRAM_ID"
+            printf 'ADMIN_TOTP_SECRETS=%s\n' "$ADMIN_TOTP_SECRETS"
+            printf 'ADMIN_TELEGRAM_IDS=%s\n' "$ADMIN_TELEGRAM_IDS"
+            printf 'ADMIN_CHAT_ID=%s\n' "$ADMIN_CHAT_ID"
+            printf 'APP_ENV=production\nDEBUG=False\nHOST=0.0.0.0\nPORT=8000\n'
+          } > "$env_file"
+          ssh -i ~/.ssh/deploy_key "$EC2_HOST" "mkdir -p $DEPLOY_PATH"
+          ssh -i ~/.ssh/deploy_key "$EC2_HOST" "git -C $DEPLOY_PATH init -q; git -C $DEPLOY_PATH remote remove origin 2>/dev/null || true; git -C $DEPLOY_PATH remote add origin https://github.com/${{ github.repository }}.git; git -C $DEPLOY_PATH fetch --depth=1 origin ${{ github.sha }}; git -C $DEPLOY_PATH checkout -f FETCH_HEAD"
+          ssh -i ~/.ssh/deploy_key "$EC2_HOST" "mkdir -p $DEPLOY_PATH/uploads"
+          ssh -i ~/.ssh/deploy_key "$EC2_HOST" "cat > $DEPLOY_PATH/.env" < "$env_file"
+          rm -f "$env_file"
 
-      - name: Roll out api and bot
+      - name: Build and restart Melbete
         run: |
-          az extension add --name containerapp --upgrade -y
-          IMAGE="${{ steps.acr.outputs.name }}.azurecr.io/bingo-app:${{ steps.vars.outputs.image_tag }}"
-          for APP in api bot; do
-            az containerapp update -g "${{ vars.AZURE_RESOURCE_GROUP }}" \
-              -n "${{ vars.NAME_PREFIX }}-$APP" --image "$IMAGE" -o none
+          ssh -i ~/.ssh/deploy_key "$EC2_HOST" "cd $DEPLOY_PATH && IMAGE_TAG=${{ github.sha }} docker compose -f docker-compose.production.yml build --pull && IMAGE_TAG=${{ github.sha }} docker compose -f docker-compose.production.yml up -d --remove-orphans"
+
+      - name: Verify public API
+        run: |
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error https://melbete.yonasgr.me/health >/dev/null; then
+              echo "Melbete API is healthy."
+              exit 0
+            fi
+            sleep 10
           done
-
-      - name: Wait for API readiness (database reachable)
-        run: |
-          FQDN=$(az containerapp show -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ vars.NAME_PREFIX }}-api" \
-                 --query properties.configuration.ingress.fqdn -o tsv)
-          for i in $(seq 1 18); do
-            if curl -sf "https://$FQDN/ready" > /dev/null; then echo "API healthy after $((i * 10))s."; exit 0; fi
-            echo "  [$i/18] not ready yet..."; sleep 10
-          done
-          echo "API did not report ready on /ready within 3 minutes."; exit 1
+          echo "Melbete API did not become healthy."
+          exit 1
