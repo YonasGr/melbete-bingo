@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 HOLDER = uuid.uuid4().hex          # identifies this process
 _shutting_down = False
-_table_ready = False
-
 _DDL = """CREATE TABLE IF NOT EXISTS loop_locks (
     name TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL)"""
 
@@ -37,16 +35,16 @@ def _disabled() -> bool:
 
 async def try_acquire(name: str, ttl_seconds: float) -> bool:
     """Acquire or renew the lease `name` for `ttl_seconds`. True only if this process now holds it."""
-    global _table_ready
     if _disabled():
         return True
     if _shutting_down:
         return False
     try:
         pool = await get_pool()
-        if not _table_ready:
-            await pool.execute(_DDL)
-            _table_ready = True
+        # Integration tests and deployments can bind a fresh schema or
+        # connection pool to this process; CREATE IF NOT EXISTS is cheap and
+        # keeps the lease table available in each search path.
+        await pool.execute(_DDL)
         return await pool.fetchval(_ACQUIRE, name, HOLDER, float(ttl_seconds)) == HOLDER
     except Exception:  # noqa: BLE001
         logger.exception("Could not confirm loop lock %r - treating it as not held", name)
