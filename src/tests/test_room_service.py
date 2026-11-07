@@ -206,8 +206,8 @@ async def test_get_or_create_waiting_session(service):
     assert len(room.draw_pool) == 75
     assert room.cartela_min == 1
     assert room.cartela_max == 500
-    # Minimum cartelas to start is configured in SystemSettings (default 2)
-    assert room.min_cartelas_to_start == 2
+    # Minimum cartelas to start is configured in SystemSettings (default 3)
+    assert room.min_cartelas_to_start == 3
 
     # Calling again while still waiting returns the SAME room - only one
     # global session may exist at a time.
