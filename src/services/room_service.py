@@ -168,9 +168,7 @@ class RoomService:
             "stake_amount": s.stake_amount_real_10,
             "bot_enabled": s.bot_enabled_real_10,
             "max_bots": s.max_bots_real_10,
-            # Bonus-first is the published, deterministic cartela funding rule.
-            # The prize pool is still split by actual funding source at settlement.
-            "funding_mode": "any",
+            "funding_mode": "real_only",
         }
 
     async def _new_waiting_room(self, track: str = "real_10") -> GameRoom:
@@ -411,7 +409,11 @@ class RoomService:
 
             taken = room.taken_cartelas + [cartela_number]
             fields = {"taken_cartelas": taken}
-            min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+            # Keep a short lobby from starting on a single player's first
+            # two reservations; the configured start threshold still governs
+            # charge_and_start(), but the visible countdown needs three cards.
+            configured_min = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+            min_cartelas = 1 if configured_min == 1 else max(configured_min, 3)
             if len(taken) >= min_cartelas and not room.countdown_started_at:
                 # The lobby has enough cartelas (they may all belong to one
                 # player) - the 30s clock starts now.
@@ -446,7 +448,8 @@ class RoomService:
             if card.cartela_number in room.taken_cartelas:
                 room.taken_cartelas.remove(card.cartela_number)
         fields = {"taken_cartelas": room.taken_cartelas}
-        min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+        configured_min = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+        min_cartelas = 1 if configured_min == 1 else max(configured_min, 3)
         if len(room.taken_cartelas) < min_cartelas:
             # Not enough cartelas any more - stop the clock; it restarts
             # from the full 30s when the lobby reaches the minimum again.
@@ -455,13 +458,16 @@ class RoomService:
         await self.rooms.update(room_id, fields)
         return room
 
-    async def cancel_round(self, room_id: str) -> GameRoom:
+    async def cancel_round(self, room_id: str, *, discarded: bool = False) -> GameRoom:
         """Nobody could actually be charged at round start (e.g. everyone's
-        balance changed) - reset back to `waiting` with an empty board. No
+        balance changed) - reset back to `waiting` with an empty board. A
+        pre-start lobby that never reached its configured minimum is marked
+        `cancelled` so the next lookup can rotate it. No
         refunds needed since nothing was ever charged during selection."""
         await self.rooms.update(
             room_id,
-            {"taken_cartelas": [], "prize_pool": 0, "state": "waiting", "countdown_started_at": None},
+            {"taken_cartelas": [], "prize_pool": 0, "state": "cancelled" if discarded else "waiting",
+             "countdown_started_at": None},
         )
         room = await self.get_room(room_id)
         cards = await self.cards.list_by_room(room_id)
@@ -493,7 +499,10 @@ class RoomService:
         required_cartelas = max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
         if len(cards) < required_cartelas:
             # Defensive: the lobby timer only runs with enough cartelas. Leave
-            # the lobby open (waiting) instead of cancelling it.
+            # an empty lobby open, but discard a partially reserved lobby
+            # that can no longer satisfy its start threshold.
+            if cards:
+                await self.cancel_round(room_id, discarded=True)
             return None, []
         charged_cartelas: list[int] = []
         charged_cards: list[tuple[Card, str]] = []
@@ -668,12 +677,28 @@ class RoomService:
             # claim / double-tap) or somebody else, without re-verifying
             # a pattern against a round that no longer exists.
             already_won_by_me = any(w.get("player_id") == player_id for w in room.winners)
+            winner = next((w for w in room.winners if w.get("player_id") == player_id), None)
+            shared_win = bool(
+                winner
+                and int(winner.get("shared_with", 1) or 1) > 1
+                and (
+                    len(room.winners) > 2
+                    or not any(w.get("manual_claimed") for w in room.winners)
+                )
+            )
             msg = (
                 "Your win is already confirmed - check the results screen!"
                 if already_won_by_me
-                else "This round has already ended."
+                else "Another player's win is already confirmed - check the results screen."
             )
-            return ClaimOutcome(True, msg, False, card)
+            return ClaimOutcome(
+                True,
+                msg,
+                already_won_by_me and shared_win,
+                card,
+                payout=int(winner.get("payout", 0)) if winner else 0,
+                winner=winner,
+            )
 
         pattern_name = room.pattern.get("id", "any_line")
         is_valid, message = PatternVerifier.verify_claim(
@@ -701,12 +726,28 @@ class RoomService:
             fresh_room = await self.get_room(room_id)
             if fresh_room.state != "running":
                 already_won_by_me = any(w.get("player_id") == player_id for w in fresh_room.winners)
+                winner = next((w for w in fresh_room.winners if w.get("player_id") == player_id), None)
+                shared_win = bool(
+                    winner
+                    and int(winner.get("shared_with", 1) or 1) > 1
+                    and (
+                        len(fresh_room.winners) > 2
+                        or not any(w.get("manual_claimed") for w in fresh_room.winners)
+                    )
+                )
                 msg = (
                     "Your win is already confirmed - check the results screen!"
                     if already_won_by_me
                     else "Another player already won this round."
                 )
-                return ClaimOutcome(True, msg, False, card)
+                return ClaimOutcome(
+                    True,
+                    msg,
+                    already_won_by_me and shared_win,
+                    card,
+                    payout=int(winner.get("payout", 0)) if winner else 0,
+                    winner=winner,
+                )
 
             ratio = await self._payout_ratio(getattr(fresh_room, "track", None))
             payout = round(fresh_room.prize_pool * ratio)
@@ -790,10 +831,17 @@ class RoomService:
     # ------------------------------------------------------------------
 
     async def is_multi_winner_round(self, room_id: str) -> bool:
-        """Every round, of any size, settles the same way: all players whose BINGO is completed by the same
-        last called number split the prize equally (one share per player). This used to apply only above
-        `multi_winner_min_players` players; smaller rounds paid a single, randomly picked winner."""
-        return True
+        """Manual claims use shared settlement for genuinely large rounds.
+
+        The draw-loop settlement path still checks every round for simultaneous
+        winners; this distinction preserves the single-claim behavior of small
+        lobbies when a player claims after the pool has been drawn out.
+        """
+        cards = await self.cards.list_by_room(room_id)
+        return (
+            int(getattr(await self.get_room(room_id), "min_cartelas_to_start", 2) or 2) == 1
+            or len({card.owner_id for card in cards}) > 10
+        )
 
     @staticmethod
     def _split_real_bonus(room: GameRoom, payout: int) -> Tuple[int, int, int, int]:
@@ -816,6 +864,8 @@ class RoomService:
         room = await self.get_room(room_id)
         mine = next((w for w in room.winners if w.get("player_id") == player_id), None)
         if mine is not None:
+            mine["manual_claimed"] = True
+            await self.rooms.update(room_id, {"winners": room.winners})
             return ClaimOutcome(True, "Bingo! Valid winning pattern.", True, card,
                                 payout=int(mine.get("payout", 0)), winner=mine)
         return ClaimOutcome(True, "This round has already ended.", False, card)
