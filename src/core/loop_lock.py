@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 HOLDER = uuid.uuid4().hex          # identifies this process
 _shutting_down = False
+_shutdown_holder = None
 _DDL = """CREATE TABLE IF NOT EXISTS loop_locks (
     name TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL)"""
 
@@ -37,7 +38,7 @@ async def try_acquire(name: str, ttl_seconds: float) -> bool:
     """Acquire or renew the lease `name` for `ttl_seconds`. True only if this process now holds it."""
     if _disabled():
         return True
-    if _shutting_down:
+    if _shutting_down and HOLDER == _shutdown_holder:
         return False
     try:
         pool = await get_pool()
@@ -65,8 +66,9 @@ async def release(name: str) -> None:
 async def shutdown() -> None:
     """Called on graceful shutdown: stop acquiring (so our still-running loops cannot re-take a lease
     after we hand it over) and release every lease we hold so the new instance continues at once."""
-    global _shutting_down
+    global _shutting_down, _shutdown_holder
     _shutting_down = True
+    _shutdown_holder = HOLDER
     if _disabled():
         return
     try:

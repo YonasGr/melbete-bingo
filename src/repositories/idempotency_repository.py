@@ -1,6 +1,8 @@
 """Postgres repository for idempotency keys (see src/api/idempotency.py)."""
 from typing import Optional
 
+import asyncpg
+
 from src.repositories.base import BaseRepository
 
 
@@ -14,19 +16,31 @@ class IdempotencyRepository(BaseRepository):
         A stale in_progress row (owner crashed mid-request) is taken over atomically.
         The conditional UPDATE + ON CONFLICT means exactly one concurrent caller wins.
         """
-        row = await self._fetchrow(
-            """
-            INSERT INTO idempotency_keys (player_id, scope, key, request_hash)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (player_id, scope, key) DO UPDATE
-                SET request_hash = EXCLUDED.request_hash, updated_at = now(), created_at = now()
-                WHERE idempotency_keys.status = 'in_progress'
-                  AND idempotency_keys.updated_at < now() - make_interval(secs => $5)
-                  AND idempotency_keys.request_hash = EXCLUDED.request_hash
-            RETURNING player_id
-            """,
-            player_id, scope, key, request_hash, float(stale_after_seconds),
-        )
+        pool = await self._pool()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    # Do not wait behind an in-flight request. Waiting would
+                    # let concurrent retries observe its completed response
+                    # instead of receiving the documented 409 conflict.
+                    await conn.execute("SET LOCAL lock_timeout = '10ms'")
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO idempotency_keys (player_id, scope, key, request_hash)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (player_id, scope, key) DO UPDATE
+                            SET request_hash = EXCLUDED.request_hash, updated_at = now(), created_at = now()
+                            WHERE idempotency_keys.status = 'in_progress'
+                              AND idempotency_keys.updated_at < now() - make_interval(secs => $5)
+                              AND idempotency_keys.request_hash = EXCLUDED.request_hash
+                        RETURNING player_id
+                        """,
+                        player_id, scope, key, request_hash, float(stale_after_seconds),
+                    )
+        except (asyncpg.exceptions.LockNotAvailableError, asyncpg.exceptions.QueryCanceledError):
+            # The conflicting row is still owned by another transaction, so
+            # its uncommitted contents are intentionally not visible here.
+            return {"status": "in_progress", "request_hash": request_hash, "response": None}
         if row is not None:
             return None
         return await self._fetchrow(
