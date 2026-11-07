@@ -145,13 +145,17 @@ CREATE TABLE IF NOT EXISTS transactions (
     notification_chat_id      TEXT,
     notification_message_id   BIGINT,
     notification_is_photo     BOOLEAN NOT NULL DEFAULT FALSE,
+    payment_verification_url  TEXT,
     created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
-    resolved_at                TIMESTAMPTZ
+    resolved_at               TIMESTAMPTZ
 );
 -- TransactionRepository.list_pending_topups() / list_pending_withdrawals()
 CREATE INDEX IF NOT EXISTS idx_transactions_type_status ON transactions (type, status);
 -- TransactionRepository.list_by_player()
 CREATE INDEX IF NOT EXISTS idx_transactions_player ON transactions (player_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_payment_verification_url
+    ON transactions (payment_verification_url)
+    WHERE payment_verification_url IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
 -- payment_methods

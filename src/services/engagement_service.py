@@ -51,6 +51,8 @@ class EngagementService:
         self._notify = notify
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
         self._last_nudge_batch: dict[str, datetime] = {}
+        self._last_nudge_sent: dict[str, datetime] = {}
+        self._last_room_players: dict[str, set[str]] = {}
 
     # -- plumbing ----------------------------------------------------------------------------
 
@@ -125,18 +127,25 @@ class EngagementService:
         if last and now - last < timedelta(minutes=cfg.engagement_nudge_batch_gap_minutes):
             return 0
         self._last_nudge_batch[track] = now
+        excluded = set(players_in_room) | self._last_room_players.get(track, set())
+        if players_in_room:
+            self._last_room_players[track] = set(players_in_room)
         candidates = await self.repo.nudge_candidates(
             now - timedelta(days=14), now - timedelta(hours=cfg.engagement_nudge_cooldown_hours),
-            list(players_in_room), cfg.engagement_nudge_max_recipients,
+            list(excluded), cfg.engagement_nudge_max_recipients,
         )
         cutoff = now - timedelta(hours=cfg.engagement_nudge_cooldown_hours)
         sent = 0
         for row in candidates:
             pid = row["player_id"]
+            previous = self._last_nudge_sent.get(pid)
+            if previous and now - previous < timedelta(hours=cfg.engagement_nudge_cooldown_hours):
+                continue
             if await self.repo.claim_nudge(pid, cutoff, now):
                 self.notify(pid, "room_filling",
                             {"stake": stake, "players": max(len(players_in_room), 1), "seconds": seconds},
                             dedupe_key=f"nudge:{pid}:{now:%Y%m%d%H%M}")
+                self._last_nudge_sent[pid] = now
                 sent += 1
         return sent
 

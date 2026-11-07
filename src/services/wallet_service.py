@@ -581,7 +581,7 @@ class WalletService:
     # ------------------------------------------------------------------
 
     async def debit_for_stake(
-        self, player_id: str, amount: int, room_id: str, funding_mode: str = "any"
+        self, player_id: str, amount: int, room_id: str, funding_mode: str = "real_first"
     ) -> Tuple[Wallet, str]:
         """Charge the entry stake when a round starts.
 
