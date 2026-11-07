@@ -20,7 +20,15 @@
     } catch (_) { /* offline or restarting: keep what is on screen */ } finally { busy = false; }
   }
 
+  /* Admin-written messages (per language) and running promotions, shared with the other player scripts */
+  let cxTexts = {}, cxPromos = [];
+  window.cxText = (key) => cxTexts[`${key}_${(window.MB_I18N && window.MB_I18N.lang) || "en"}`] || "";
+  window.cxBoost = () => cxPromos.reduce((m, p) => (p.applies === "cashback" ? Math.max(m, Number(p.multiplier) || 1) : m), 1);
+
   function apply(cfg) {
+    cxTexts = cfg.texts || {}; cxPromos = cfg.promotions || [];
+    if (window.paintCashback) window.paintCashback();
+    document.dispatchEvent(new Event("melbete:texts"));
     maintenance(cfg.maintenance);
     announcement(cfg.announcement);
     banner(cfg.banner, cfg.texts && cfg.texts.home_note);

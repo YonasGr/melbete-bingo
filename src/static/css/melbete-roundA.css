@@ -107,3 +107,29 @@
   .receipt-card .rc-check circle, .receipt-card .rc-check path { stroke-dashoffset: 0; }
   .ob-slide, .mb-onboard, .mb-step-dot, .mb-steps-wrap::after { transition: none; }
 }
+
+/* ---------- Top bar deposit button (replaces the language pill) ---------- */
+.header-deposit-btn { display: inline-flex; align-items: center; gap: .35rem; height: 42px; padding: 0 .85rem 0 .7rem; border: 0; border-radius: 999px; background: linear-gradient(135deg, #FFD65C, #F5A800); color: #14110A; font: 800 .8rem/1 var(--melbete-font); cursor: pointer; box-shadow: 0 4px 14px -4px rgb(255 184 0 / .6); transition: transform .18s; }
+.header-deposit-btn svg { width: 18px; height: 18px; flex: none; }
+.header-deposit-btn:active { transform: scale(.95); }
+.header-deposit-btn:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+@media (max-width: 400px) {
+  #top-bar .header-deposit-btn { width: 36px; height: 36px; padding: 0; justify-content: center; }
+  #top-bar .header-deposit-btn span { display: none; }
+}
+
+/* ---------- Language switch lives at the bottom of the profile drawer ---------- */
+.profile-drawer-footer { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .85rem 1.25rem calc(.85rem + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); background: var(--surface); }
+.profile-drawer-footer .pdf-label { font-size: .9rem; font-weight: 700; color: var(--ink); }
+
+/* Picker header: only "Pick for me", moved up and stretched across the freed space */
+.quick-picker .qp-head { margin-bottom: 8px; }
+.quick-picker .qp-head .qp-random { width: 100%; }
+
+/* Cartela preview shown inline, on top of the list */
+.qp-preview { margin: 0 0 10px; padding: 10px; border-radius: 16px; border: 1px solid rgb(255 201 51 / .4); background: rgb(255 201 51 / .06); }
+.qp-preview .preview-card { max-width: 260px; margin: 0 auto 8px; }
+.qp-preview .muted { text-align: center; margin: 0 0 8px; }
+.qp-preview-actions { display: flex; gap: 8px; }
+.qp-preview-actions button { flex: 1; }
+.quick-picker .qp-chip.previewing, .quick-picker button.previewing { outline: 2px solid #FFC933; outline-offset: 1px; }

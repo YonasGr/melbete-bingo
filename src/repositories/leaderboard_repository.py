@@ -1,5 +1,4 @@
 """Postgres repository for leaderboard campaigns, points, channel attempts and approved rewards."""
-import json
 from datetime import datetime
 from typing import Optional
 
@@ -8,19 +7,8 @@ from src.repositories.base import BaseRepository
 
 _CAMPAIGN_FIELDS = (
     "name", "timezone", "starts_at", "ends_at", "budget_etb", "winners_count", "points_per_cartela",
-    "wagering_multiplier", "channel_enabled", "channel_username", "channel_points", "cancelled", "reward_tiers",
+    "wagering_multiplier", "channel_enabled", "channel_username", "channel_points", "cancelled",
 )
-
-
-def _norm(row: Optional[dict]) -> Optional[dict]:
-    """jsonb comes back from asyncpg as text; hand the service a real list."""
-    if row is not None and isinstance(row.get("reward_tiers"), str):
-        row["reward_tiers"] = json.loads(row["reward_tiers"])
-    return row
-
-
-def _db_value(key: str, value):
-    return json.dumps(value) if key == "reward_tiers" and value is not None else value
 
 # One row per player with their totals; banned accounts and bots never appear on a leaderboard.
 _STANDINGS_SQL = """
@@ -28,8 +16,6 @@ _STANDINGS_SQL = """
            SUM(lp.points)::int AS points,
            COALESCE(SUM(lp.points) FILTER (WHERE lp.source = 'cartela'), 0)::int AS cartela_points,
            COALESCE(SUM(lp.points) FILTER (WHERE lp.source = 'channel'), 0)::int AS channel_points,
-           COALESCE(SUM(lp.stake_etb) FILTER (WHERE lp.source = 'cartela'), 0)::int AS reserved_etb,
-           COUNT(*) FILTER (WHERE lp.source = 'cartela')::int AS cartelas,
            MAX(lp.created_at) AS last_at,
            pl.display_name
     FROM leaderboard_points lp
@@ -38,8 +24,6 @@ _STANDINGS_SQL = """
     GROUP BY lp.player_id, pl.display_name
     HAVING SUM(lp.points) > 0
 """
-# Ranking: most points; a tie goes to the player who reserved more ETB, then to whoever got there first.
-_RANK_ORDER = "points DESC, reserved_etb DESC, last_at ASC"
 
 
 class LeaderboardRepository(BaseRepository):
@@ -48,81 +32,77 @@ class LeaderboardRepository(BaseRepository):
     # ------------------------------------------------------------------ campaigns
     async def create_campaign(self, values: dict, created_by: str) -> dict:
         cols = ("id",) + _CAMPAIGN_FIELDS + ("created_by",)
-        args = [new_id()] + [_db_value(k, values.get(k)) for k in _CAMPAIGN_FIELDS] + [created_by]
+        args = [new_id()] + [values[k] for k in _CAMPAIGN_FIELDS] + [created_by]
         ph = ", ".join(f"${i + 1}" for i in range(len(cols)))
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             f"INSERT INTO leaderboard_campaigns ({', '.join(cols)}) VALUES ({ph}) RETURNING *", *args
-        ))
+        )
 
     async def update_campaign(self, campaign_id: str, fields: dict) -> Optional[dict]:
         keys = [k for k in fields if k in _CAMPAIGN_FIELDS]
         if not keys:
             return await self.get_campaign(campaign_id)
         sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(keys))
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             f"UPDATE leaderboard_campaigns SET {sets}, updated_at = ${len(keys) + 2} WHERE id = $1 RETURNING *",
-            campaign_id, *[_db_value(k, fields[k]) for k in keys], utcnow(),
-        ))
+            campaign_id, *[fields[k] for k in keys], utcnow(),
+        )
 
     async def get_campaign(self, campaign_id: str) -> Optional[dict]:
-        return _norm(await self._fetchrow("SELECT * FROM leaderboard_campaigns WHERE id = $1", campaign_id))
+        return await self._fetchrow("SELECT * FROM leaderboard_campaigns WHERE id = $1", campaign_id)
 
     async def list_campaigns(self, limit: int = 50) -> list[dict]:
-        return [_norm(r) for r in await self._fetch("SELECT * FROM leaderboard_campaigns ORDER BY starts_at DESC LIMIT $1", limit)]
+        return await self._fetch("SELECT * FROM leaderboard_campaigns ORDER BY starts_at DESC LIMIT $1", limit)
 
     async def overlapping(self, starts_at: datetime, ends_at: datetime, exclude_id: Optional[str] = None) -> Optional[dict]:
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             "SELECT * FROM leaderboard_campaigns WHERE NOT cancelled AND starts_at < $2 AND ends_at > $1 "
             "AND ($3::text IS NULL OR id <> $3) LIMIT 1",
             starts_at, ends_at, exclude_id,
-        ))
+        )
 
     async def get_active(self, now: datetime) -> Optional[dict]:
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             "SELECT * FROM leaderboard_campaigns WHERE NOT cancelled AND starts_at <= $1 AND ends_at > $1 LIMIT 1", now,
-        ))
+        )
 
     async def get_upcoming(self, now: datetime) -> Optional[dict]:
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             "SELECT * FROM leaderboard_campaigns WHERE NOT cancelled AND starts_at > $1 ORDER BY starts_at LIMIT 1", now,
-        ))
+        )
 
     async def get_latest_ended(self, now: datetime) -> Optional[dict]:
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             "SELECT * FROM leaderboard_campaigns WHERE NOT cancelled AND ends_at <= $1 ORDER BY ends_at DESC LIMIT 1", now,
-        ))
+        )
 
     async def decide(self, campaign_id: str, status: str, admin_id: str, note: str, now: datetime) -> Optional[dict]:
         """Claim the one-and-only distribution decision. None if already decided or the campaign has not ended."""
-        return _norm(await self._fetchrow(
+        return await self._fetchrow(
             "UPDATE leaderboard_campaigns SET distribution_status = $2, decided_by = $3, decision_note = $4, "
             "decided_at = $5, updated_at = $5 WHERE id = $1 AND distribution_status = 'none' AND NOT cancelled "
             "AND ends_at <= $5 RETURNING *",
             campaign_id, status, admin_id, note, now,
-        ))
+        )
 
     async def set_total_distributed(self, campaign_id: str, total: int) -> None:
         await self._execute("UPDATE leaderboard_campaigns SET total_distributed = $2 WHERE id = $1", campaign_id, total)
 
     # ------------------------------------------------------------------ points
-    async def add_points(self, campaign_id: str, player_id: str, source: str, points: int, dedupe_key: str, note: str = "",
-                         stake_etb: int = 0) -> bool:
+    async def add_points(self, campaign_id: str, player_id: str, source: str, points: int, dedupe_key: str, note: str = "") -> bool:
         row = await self._fetchrow(
-            "INSERT INTO leaderboard_points (id, campaign_id, player_id, source, points, dedupe_key, note, stake_etb) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING RETURNING id",
-            new_id(), campaign_id, player_id, source, points, dedupe_key, note, max(0, int(stake_etb)),
+            "INSERT INTO leaderboard_points (id, campaign_id, player_id, source, points, dedupe_key, note) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING RETURNING id",
+            new_id(), campaign_id, player_id, source, points, dedupe_key, note,
         )
         return row is not None
 
     async def standings(self, campaign_id: str, limit: int = 100) -> list[dict]:
-        return await self._fetch(_STANDINGS_SQL + f" ORDER BY {_RANK_ORDER} LIMIT $2", campaign_id, limit)
-
-    async def standing_at_rank(self, campaign_id: str, rank: int) -> Optional[dict]:
-        return await self._fetchrow(_STANDINGS_SQL + f" ORDER BY {_RANK_ORDER} OFFSET $2 LIMIT 1", campaign_id, max(0, rank - 1))
+        return await self._fetch(_STANDINGS_SQL + " ORDER BY points DESC, last_at ASC LIMIT $2", campaign_id, limit)
 
     async def player_standing(self, campaign_id: str, player_id: str) -> Optional[dict]:
         return await self._fetchrow(
-            "SELECT * FROM (SELECT t.*, ROW_NUMBER() OVER (ORDER BY points DESC, reserved_etb DESC, last_at ASC) AS rank FROM ("
+            "SELECT * FROM (SELECT t.*, ROW_NUMBER() OVER (ORDER BY points DESC, last_at ASC) AS rank FROM ("
             + _STANDINGS_SQL + ") t) r WHERE r.player_id = $2",
             campaign_id, player_id,
         )
@@ -214,15 +194,6 @@ class LeaderboardRepository(BaseRepository):
         await self._execute(
             "UPDATE leaderboard_rewards SET wagered = wagered + $2 WHERE player_id = $1 AND status = 'locked' AND credited_at IS NOT NULL",
             player_id, stake,
-        )
-
-    async def add_bonus_won(self, player_id: str, amount: int) -> None:
-        """Winnings that landed in the bonus balance while a leaderboard reward was still locked."""
-        if int(amount) <= 0:
-            return
-        await self._execute(
-            "UPDATE leaderboard_rewards SET bonus_won = bonus_won + $2 WHERE player_id = $1 AND status = 'locked' AND credited_at IS NOT NULL",
-            player_id, int(amount),
         )
 
     async def due_release(self, player_id: str) -> list[dict]:

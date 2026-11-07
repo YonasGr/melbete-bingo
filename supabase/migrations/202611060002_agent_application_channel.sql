@@ -1,0 +1,3 @@
+-- Agent applications now carry the applicant's Telegram group or channel (stored as a normalised https://t.me/...
+-- link) so an admin can open it and check it before approving. The existing `note` column holds the description.
+ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS channel_link TEXT NOT NULL DEFAULT '';

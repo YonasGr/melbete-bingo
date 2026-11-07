@@ -39,7 +39,19 @@ async function api(path, options = {}) {
   // Telegram's own signed initData string is the only accepted player
   // credential; long-lived browser bearer tokens are disabled.
   if (tg?.initData) headers["X-Telegram-Init-Data"] = tg.initData;
-  const res = await fetch(`${API}${path}`, { ...options, headers });
+  // Never wait forever on a slow server: give up after 20s so screens can show an error / retry
+  // instead of spinning on "Loading..." for good.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 20000);
+  let res;
+  try {
+    res = await fetch(`${API}${path}`, { ...options, headers, signal: ctrl.signal });
+  } catch (e) {
+    if (e && e.name === "AbortError") throw new Error("The server is taking too long to respond. Please try again.");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.detail || `Request failed (${res.status})`);
@@ -116,3 +128,28 @@ async function pollNotice(playerId, onTap) {
   }
   return unread_count;
 }
+
+// ---- Cashback label: "5% Cashback" on the floating icon and the note in the deposit screen -------------
+(function () {
+  let pct = 5;
+  const t = (k, v) => (window.mbT ? window.mbT(k, v) : (k === "cb_label" ? "Cashback"
+    : `Don't withdraw today and get ${v.p}% of today's deposits back tomorrow as bonus credit.`));
+  function paint() {
+    const boost = window.cxBoost ? window.cxBoost() : 1;
+    const eff = Math.round(pct * boost * 10) / 10;
+    document.querySelectorAll(".cashback-fab .cb-pct").forEach((el) => { el.textContent = `${eff}%`; });
+    document.querySelectorAll(".cashback-fab .cb-word").forEach((el) => { el.textContent = boost > 1 ? `${t("cb_label")} \u00D7${boost}` : t("cb_label"); });
+    const n = document.getElementById("deposit-cashback-note");
+    if (n) {
+      const custom = window.cxText ? window.cxText("cashback_note") : "";
+      n.textContent = custom ? custom.replace(/\{p\}/g, String(eff)) : t("dep_cb_note", { p: eff });
+    }
+  }
+  window.paintCashback = function (percent) {
+    const p = Number(percent);
+    if (Number.isFinite(p) && p > 0) pct = p;
+    paint();
+  };
+  document.addEventListener("melbete:lang", paint);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", paint); else paint();
+})();

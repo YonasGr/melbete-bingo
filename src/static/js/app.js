@@ -142,6 +142,7 @@ async function refreshFooterBadges() {
     const pb = document.getElementById("rf-badge-promos");
     if (pb) { pb.textContent = String(n); pb.classList.toggle("hidden", !(n > 0)); }
     document.getElementById("room-cashback-dot")?.classList.toggle("hidden", !(n > 0));
+    if (r.cashback && window.paintCashback) window.paintCashback(r.cashback.amount_etb);
   } catch (e) { /* badges just stay as they were */ }
   try {
     const res = await api(`/api/wallet/${state.playerId}/transactions?limit=10`);
@@ -384,7 +385,7 @@ function renderCartelaGrid() {
         ? `Taken by ${takenBy[n]?.name || "another player"}`
         : atLimit
           ? `You already have ${state.cardsPerPlayer} cartelas this round`
-          : "Tap to reserve";
+          : "Tap to pick";
   });  filterCartelas();
 }
 
@@ -403,11 +404,11 @@ function setLobbyLocked(locked) {
 }
 
 function lobbyStatusText(room) {
+  const min = room?.min_cartelas_to_start || 2;
   const taken = room?.taken_cartelas?.length || 0;
-  const players = room?.player_count || 0;
-  if (room?.countdown_started_at) return `${players} players joined - the round starts when the countdown ends.`;
-  if (players < 2) return `${players} player joined. Waiting for another player before the countdown starts.`;
-  return `${players} players joined with ${taken} cartela(s) reserved.`;
+  if (room?.countdown_started_at) return `${taken} cartela(s) reserved - the round starts when the countdown ends.`;
+  const need = Math.max(min - taken, 0);
+  return `${taken} of ${min} cartelas reserved. Reserve ${need} more to start the ${room?.countdown_seconds || 30}s countdown.`;
 }
 
 function renderCartelaPreview() {
@@ -1444,7 +1445,7 @@ function startCountdownBanner(seconds) {
   const deadline = Date.now() + Math.max(Number(seconds) || 0, 0) * 1000;
   const banner = document.getElementById("countdown-banner");
   banner.classList.remove("hidden");
-  document.getElementById("players-joined-count").textContent = state.room?.player_count || 0;
+  document.getElementById("players-joined-count").textContent = state.room?.taken_cartelas?.length || 0;
   let lastCueSecond = null;
   const tick = () => {
     const remainingMs = Math.max(deadline - Date.now(), 0);
@@ -1598,11 +1599,11 @@ async function openBonusCenter() {
   try {
     const data = await api(`/api/bonus/summary/${encodeURIComponent(state.playerId)}`);
     document.getElementById('bonus-center-balance').textContent = data.bonus_balance ?? 0;
-    const labels = {welcome:'Welcome bonus', referral:'Referral reward', daily:'Daily bonus', first_deposit:'First deposit reward'};
+    const labels = {welcome:'Welcome bonus', referral:'Referral reward', daily:'Daily bonus', first_deposit:'First deposit reward', cashback:'Daily cashback'};
     rewards.innerHTML = Object.entries(data.rewards || {}).map(([kind, reward]) => {
-      const automatic = kind === 'first_deposit';
+      const automatic = kind === 'first_deposit' || kind === 'cashback';
       const claimable = !automatic && kind !== 'referral' && reward.enabled && reward.status !== 'claimed';
-      const status = reward.status === 'claimed' ? 'Already claimed' : (reward.status === 'automatic' ? 'Applied automatically to your first approved deposit' : (reward.enabled ? 'Available' : 'Paused'));
+      const status = reward.status === 'claimed' ? 'Already claimed' : (reward.status === 'automatic' ? (kind === 'cashback' ? 'Paid automatically the next day if you deposit and do not withdraw that day' : 'Applied automatically to your first approved deposit') : (reward.enabled ? 'Available' : 'Paused'));
       const value = automatic ? `${Number(reward.amount_etb)}%` : `${Number(reward.amount_etb)} ETB`;
       return `<section class="bonus-reward-row" style="padding:12px 0;border-bottom:1px solid var(--border-color,#ddd)">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><strong>${labels[kind] || kind}</strong><strong>${value}</strong></div>

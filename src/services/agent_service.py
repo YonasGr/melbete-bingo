@@ -5,6 +5,7 @@ ever changed by an admin through `adjust_float`, one atomic DB transaction with 
 can never go below zero. Player top-ups and commission build on this in later steps.
 """
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -28,7 +29,38 @@ MIN_CASHOUT = 10  # ETB of commission per cash-out
 MAX_FLOAT_ADJUSTMENT = 1_000_000  # ETB per single adjustment - guards against a typo'd extra zero
 
 
-MAX_APPLICATION_NOTE = 300
+MAX_APPLICATION_NOTE = 500
+MIN_APPLICATION_NOTE = 10
+
+_TG_USERNAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+_TG_INVITE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def normalize_telegram_address(raw: str) -> str:
+    """Turn what an applicant typed (@name, t.me/name, https://t.me/name, t.me/+invite, t.me/joinchat/invite)
+    into one canonical https://t.me/... link. Raises InvalidAgentInputError when it is not a Telegram address."""
+    text = str(raw or "").strip()
+    if not text:
+        raise InvalidAgentInputError("Please enter your Telegram group or channel link")
+    if len(text) > 200:
+        raise InvalidAgentInputError("That Telegram link is too long")
+    text = re.sub(r"^(https?://)?((www\.)?(t\.me|telegram\.me|telegram\.dog)/)?", "", text, flags=re.I)
+    text = text.split("?")[0].split("#")[0].strip().strip("/")
+    if text.startswith("@"):
+        text = text[1:]
+    if text.startswith("+"):
+        code = text[1:]
+        if _TG_INVITE.match(code):
+            return f"https://t.me/+{code}"
+    elif text.lower().startswith("joinchat/"):
+        code = text.split("/", 1)[1].strip("/")
+        if _TG_INVITE.match(code):
+            return f"https://t.me/joinchat/{code}"
+    elif "/" not in text and _TG_USERNAME.match(text):
+        return f"https://t.me/{text}"
+    raise InvalidAgentInputError("Enter a valid Telegram group or channel link, like https://t.me/yourchannel or @yourchannel")
+
+
 DEFAULT_APPLICATION_COMMISSION_PERCENT = 3   # the admin can change it when approving
 
 
@@ -125,10 +157,13 @@ class AgentService:
     # Registration requests: a player applies, an admin approves (-> becomes an agent) or rejects
     # ------------------------------------------------------------------
 
-    async def apply(self, player_id: str, note: str = "") -> dict:
+    async def apply(self, player_id: str, channel_link: str = "", note: str = "") -> dict:
+        channel_link = normalize_telegram_address(channel_link)
         note = str(note or "").strip()
+        if len(note) < MIN_APPLICATION_NOTE:
+            raise InvalidAgentInputError(f"Please describe your group or channel (at least {MIN_APPLICATION_NOTE} characters)")
         if len(note) > MAX_APPLICATION_NOTE:
-            raise InvalidAgentInputError(f"Please keep the note under {MAX_APPLICATION_NOTE} characters")
+            raise InvalidAgentInputError(f"Please keep the description under {MAX_APPLICATION_NOTE} characters")
         player = await self.players.get_by_id(player_id)
         if player is None:
             raise AgentNotFoundError("Player not found")
@@ -136,7 +171,7 @@ class AgentService:
             raise InvalidAgentInputError("This account cannot become an agent")
         if await self.agents.get_by_player(player_id):
             raise AgentAlreadyExistsError("You are already an agent")
-        app = await self.agents.create_application(player_id, note)
+        app = await self.agents.create_application(player_id, note, channel_link)
         if app is None:
             raise InvalidAgentInputError("You already have a request waiting for review")
         logger.info("Player %s applied to become an agent", player_id)

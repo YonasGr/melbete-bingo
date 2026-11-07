@@ -708,8 +708,6 @@ class WalletService:
         wallet = await self.wallet_repo.apply_delta(
             player_id, balance=real_amount, won=real_amount, bonus=bonus_amount
         )
-        if bonus_amount > 0:
-            await self._note_bonus_win(player_id, bonus_amount)
         await self.transaction_repo.create(
             Transaction(
                 player_id=player_id,
@@ -722,15 +720,6 @@ class WalletService:
             )
         )
         return wallet
-
-    async def _note_bonus_win(self, player_id: str, amount: int) -> None:
-        """Remember winnings from bonus play for a locked leaderboard reward. Bookkeeping only - never blocks a payout."""
-        try:
-            from src.repositories.leaderboard_repository import LeaderboardRepository
-
-            await LeaderboardRepository().add_bonus_won(player_id, amount)
-        except Exception:  # noqa: BLE001
-            logger.exception("Could not record bonus winnings for leaderboard wagering (player %s)", player_id)
 
     async def admin_adjust(self, player_id: str, amount: int, admin_id: str, note: str = "") -> Wallet:
         """Manual balance correction by an admin (e.g. reconciling a

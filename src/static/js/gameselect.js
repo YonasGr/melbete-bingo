@@ -200,7 +200,7 @@ const PROMO_META = {
   welcome: { icon: "🎁", title: "Welcome gift", detail: "Free credit for Bingo cartelas." },
   daily: { icon: "📅", title: "Daily bonus", detail: "Come back every day for a new reward." },
   first_deposit: { icon: "💰", title: "First deposit bonus", detail: "Added automatically when your first deposit is approved." },
-  cashback: { icon: "💸", title: "Cashback", detail: "Get a share of your play back as bonus credit." },
+  cashback: { icon: "💸", title: "Cashback", detail: "Deposit today and don't withdraw today: get a share of today's deposits back tomorrow as bonus credit." },
 };
 
 function claimableCount(data) {
@@ -219,6 +219,7 @@ async function refreshPromoBadge() {
   try {
     const data = await api(`/api/bonus/summary/${encodeURIComponent(state.playerId)}`);
     setPromoBadges(claimableCount(data));
+    if (data.rewards && data.rewards.cashback && window.paintCashback) window.paintCashback(data.rewards.cashback.amount_etb);
   } catch (e) { /* badge just stays as it was */ }
 }
 
@@ -234,7 +235,7 @@ function promoCard(kind, info, data) {
   body.className = "promo-card-body";
   const title = document.createElement("strong");
   const value = info
-    ? (kind === "first_deposit" ? ` · +${info.amount_etb}%` : ` · ${info.amount_etb} ETB`)
+    ? (kind === "first_deposit" ? ` · +${info.amount_etb}%` : kind === "cashback" ? ` · ${info.amount_etb}%` : ` · ${info.amount_etb} ETB`)
     : "";
   title.textContent = meta.title + value;
   const detail = document.createElement("span");
@@ -260,6 +261,21 @@ function promoCard(kind, info, data) {
 
   if (!info) {
     action.append(tag("Coming soon", "soon"));
+  } else if (kind === "cashback" && info.enabled) {
+    const p = info.percent ?? info.amount_etb;
+    if (info.withdrew_today) {
+      detail.textContent = `You withdrew today, so today's deposits will not earn ${p}% cashback.`;
+      action.append(tag("No cashback today", "paused"));
+    } else if (info.pending_etb > 0) {
+      detail.textContent = `You deposited ${info.today_deposited_etb} ETB today. Don't withdraw today and ${info.pending_etb} ETB comes back tomorrow.` +
+        (info.boost_now > 1 ? ` Boost on now: ×${info.boost_now} cashback.` : "");
+      action.append(tag(`+${info.pending_etb} ETB tomorrow`, "done"));
+    } else {
+      detail.textContent = `Deposit today and don't withdraw today: ${p}% of your deposits comes back tomorrow as bonus credit.` +
+        (info.boost_now > 1 ? ` Boost on now: ×${info.boost_now} cashback!` : "") +
+        (info.last_amount_etb ? ` Last cashback: ${info.last_amount_etb} ETB.` : "");
+      action.append(btn("Deposit", () => { closeModal("promo-modal"); setHubTab("deposit"); openDepositModal(); }));
+    }
   } else if (info.status === "available") {
     action.append(btn("Claim", (b) => claimPromoReward(kind, b)));
   } else if (info.status === "automatic") {
@@ -281,6 +297,7 @@ function renderPromoList(data) {
   const rewards = data.rewards || {};
   list.innerHTML = "";
   ["welcome", "daily", "first_deposit"].forEach((k) => { if (rewards[k]) list.appendChild(promoCard(k, rewards[k], data)); });
+  if (rewards.cashback && window.paintCashback) window.paintCashback(rewards.cashback.amount_etb);
   // Cashback: real campaign if the backend provides one, otherwise a clear placeholder.
   list.appendChild(promoCard("cashback", rewards.cashback || null, data));
 
@@ -390,8 +407,9 @@ async function renderPromoBanner() {
 // ---------------------------------------------------------------------
 let quickPickBusy = false;
 const MAX_CARTELAS = 4;               // a player holds 1-4 cartelas per round
-let quickSelected = new Set();         // cartela numbers ticked on the hub, not yet reserved
 let quickRoomId = null;
+let quickPreviewNo = null;              // cartela whose card is shown above the list
+let quickCards = new Map();            // cartela number -> my reserved card (with grid) in the open lobby
 
 function secondsLeft(room) {
   if (!room.countdown_started_at) return null;
@@ -399,37 +417,105 @@ function secondsLeft(room) {
   return Math.max(0, Math.round(left));
 }
 
-/** Reserve every ticked cartela (1-4) through the normal select-cartela endpoint, one by one. */
-async function reserveQuickCartelas(room, numbers) {
-  if (quickPickBusy || !numbers.length) return;
+/** Tap = reserved. No "Reserve" step: the cartela is taken straight away and its card is shown as a preview. */
+async function reserveQuickCartela(room, n) {
+  if (quickPickBusy) return;
+  const existing = quickCards.get(n);
+  if (existing) { openQuickSheet(room, existing); return; }
   quickPickBusy = true;
   document.querySelectorAll("#cartela-quick-picker button").forEach((b) => { b.disabled = true; });
-  const failed = [];
-  let reason = null;
+  let card = null;
   let balanceShort = false;
-  for (const n of numbers) {
-    try {
-      await api(`/api/session/${room.id}/select-cartela`, {
-        method: "POST",
-        body: JSON.stringify({ player_id: state.playerId, cartela_number: n }),
-      });
-    } catch (e) {
-      failed.push(n); reason = e.message;
-      if (e.status === 402) { balanceShort = true; break; }   // no point trying the rest
-      if (e.status === 409 || e.status === 400) continue;    // taken / over the limit: try the others
-    }
+  try {
+    const res = await api(`/api/session/${room.id}/select-cartela`, {
+      method: "POST",
+      body: JSON.stringify({ player_id: state.playerId, cartela_number: n }),
+    });
+    card = res.card;
+    quickCards.set(n, card);
+  } catch (e) {
+    toast(e.message || "Could not reserve the cartela.", "error");
+    balanceShort = e.status === 402;
   }
   quickPickBusy = false;
-  if (failed.length < numbers.length) {
-    // at least one is reserved - go to the room; tell the player about any that were not.
-    if (failed.length) toast(`Reserved ${numbers.length - failed.length}. ${reason || "Some cartelas could not be reserved."}`, "error");
-    window.location.href = GAME_ROUTES.bingo;
-    return;
-  }
-  toast(reason || "Could not reserve the cartela.", "error");
-  quickSelected = new Set();
   if (balanceShort) { setHubTab("deposit"); openDepositModal(); }
-  renderCartelaPicker();
+  await renderCartelaPicker();
+  if (card) openQuickSheet(room, card);
+}
+
+const QP_LETTERS = ["B", "I", "N", "G", "O"];
+
+function buildQuickCardPreview(card) {
+  const wrap = document.createElement("div");
+  wrap.className = "preview-card";
+  const title = document.createElement("div");
+  title.className = "preview-card-title";
+  const span = document.createElement("span");
+  span.textContent = `Cartela #${card.cartela_number}`;
+  title.appendChild(span);
+  wrap.appendChild(title);
+  const header = document.createElement("div");
+  header.className = "card-header-row";
+  QP_LETTERS.forEach((l, i) => {
+    const c = document.createElement("div");
+    c.className = `card-header-cell col-${i}`;
+    c.textContent = l;
+    header.appendChild(c);
+  });
+  wrap.appendChild(header);
+  const grid = document.createElement("div");
+  grid.className = "card-grid";
+  (card.grid || []).forEach((row) => row.forEach((cell) => {
+    const el = document.createElement("div");
+    el.className = "card-cell";
+    if (cell.free) el.classList.add("free");
+    el.textContent = cell.free ? "\u2605" : cell.value;
+    grid.appendChild(el);
+  }));
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+/** Show a reserved cartela's card on top of the list (inline, no pop-up). */
+function openQuickSheet(room, card) {
+  quickPreviewNo = card.cartela_number;
+  renderCartelaPicker().then(() => {
+    document.getElementById("cartela-quick-picker")?.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
+}
+
+function buildQuickPreviewPanel(room, card, count, cap) {
+  const panel = document.createElement("div");
+  panel.className = "qp-preview";
+  panel.appendChild(buildQuickCardPreview(card));
+  const note = document.createElement("p");
+  note.className = "muted small";
+  note.textContent = `Cartela ${card.cartela_number} is reserved for you (${count}/${cap}). ${room.stake_amount} ETB is charged only when the round starts.`;
+  const actions = document.createElement("div");
+  actions.className = "qp-preview-actions";
+  const close = document.createElement("button");
+  close.type = "button"; close.className = "primary-btn"; close.textContent = "Done";
+  close.addEventListener("click", () => { quickPreviewNo = null; renderCartelaPicker(); });
+  const remove = document.createElement("button");
+  remove.type = "button"; remove.className = "secondary-btn"; remove.textContent = "Remove this cartela";
+  remove.addEventListener("click", async () => {
+    remove.disabled = true;
+    try {
+      await api(`/api/session/${room.id}/release-cartela`, {
+        method: "POST",
+        body: JSON.stringify({ player_id: state.playerId, card_id: card.id }),
+      });
+      quickCards.delete(card.cartela_number);
+      quickPreviewNo = null;
+      renderCartelaPicker();
+    } catch (e) {
+      toast(e.message || "Could not remove the cartela.", "error");
+      remove.disabled = false;
+    }
+  });
+  actions.append(close, remove);
+  panel.append(note, actions);
+  return panel;
 }
 
 // The hub always shows EVERY cartela (cartela_min..cartela_max). Free ones are tappable while the lobby is
@@ -445,10 +531,7 @@ function scheduleQuickPicker() {
 
 // No active lobby: keep the picker on screen, greyed out, until the next round opens.
 function renderPickerWaiting(box) {
-  quickSelected = new Set(); quickRoomId = null; quickPickerOpen = false;
-  const head = document.createElement("div");
-  head.className = "qp-head";
-  head.innerHTML = '<div><h2>Pick your cartela</h2><p class="qp-sub">Waiting for the next round - cartelas open soon.</p></div>';
+  quickCards = new Map(); quickRoomId = null; quickPickerOpen = false;
   const grid = document.createElement("div");
   grid.className = "qp-grid";
   for (let n = 1; n <= 500; n++) {
@@ -459,7 +542,7 @@ function renderPickerWaiting(box) {
   }
   box.classList.add("waiting");
   box.classList.remove("hidden");
-  box.replaceChildren(head, grid);
+  box.replaceChildren(grid);
   document.body.classList.add("has-quick-picker");
 }
 
@@ -473,31 +556,24 @@ async function renderCartelaPicker() {
     box.classList.remove("hidden", "waiting");
     const open = room.state === "waiting";
     quickPickerOpen = open;
-    if (room.id !== quickRoomId) { quickRoomId = room.id; quickSelected = new Set(); }
+    if (room.id !== quickRoomId) { quickRoomId = room.id; quickCards = new Map(); quickPreviewNo = null; }
 
     // Cartelas this player already holds in the open lobby count towards the 1-4 limit.
     let mine = [];
     if (open) {
-      try { mine = ((await api(`/api/session/${room.id}/my-cards?player_id=${state.playerId}`)).cards || []).map((c) => c.cartela_number); } catch (e) { /* optional */ }
+      try {
+        const cards = (await api(`/api/session/${room.id}/my-cards?player_id=${state.playerId}`)).cards || [];
+        quickCards = new Map(cards.map((c) => [c.cartela_number, c]));
+        mine = cards.map((c) => c.cartela_number);
+      } catch (e) { mine = [...quickCards.keys()]; /* optional */ }
     }
     const maxCards = Math.max(1, Math.min(room.cards_per_player || MAX_CARTELAS, MAX_CARTELAS));
     const remaining = Math.max(0, maxCards - mine.length);
     const min = room.cartela_min || 1, max = room.cartela_max || 500;
     const taken = new Set(room.taken_cartelas || []);
-    quickSelected.forEach((n) => { if (taken.has(n) || n < min || n > max) quickSelected.delete(n); });
-    while (quickSelected.size > remaining) quickSelected.delete([...quickSelected].pop());
 
-    const left = secondsLeft(room);
     const head = document.createElement("div");
     head.className = "qp-head";
-    head.innerHTML = '<div><h2>Pick your cartela</h2><p class="qp-sub"></p></div>';
-    const sub = head.querySelector(".qp-sub");
-    if (open) {
-      sub.textContent = `Stake ${room.stake_amount} ETB per cartela - pick 1 to ${maxCards}` +
-        (mine.length ? ` (you hold ${mine.length})` : "") +
-        (left !== null ? ` - starts in ${left}s` : " - round starts when enough cartelas are picked");
-    } else if (room.state === "running") sub.textContent = "A round is in progress - the next one opens when it ends.";
-    else sub.textContent = "Round finished - the next round opens in a moment.";
 
     const free = [];
     for (let n = min; n <= max; n++) if (!taken.has(n)) free.push(n);
@@ -505,10 +581,8 @@ async function renderCartelaPicker() {
     random.type = "button"; random.className = "qp-random"; random.textContent = "Pick for me";
     random.disabled = !open || remaining === 0 || free.length === 0;
     random.addEventListener("click", () => {
-      const pool = free.filter((n) => !quickSelected.has(n));
-      if (!pool.length || quickSelected.size >= remaining) return;
-      quickSelected.add(pool[Math.floor(Math.random() * pool.length)]);
-      renderCartelaPicker();
+      if (!free.length || remaining === 0) return;
+      reserveQuickCartela(room, free[Math.floor(Math.random() * free.length)]);
     });
     head.appendChild(random);
 
@@ -532,48 +606,35 @@ async function renderCartelaPicker() {
       const b = document.createElement("button");
       b.type = "button"; b.className = "qp-chip"; b.textContent = n;
       b.setAttribute("aria-label", `Cartela ${n}`);
-      if (mine.includes(n)) { b.disabled = true; b.classList.add("mine"); b.setAttribute("aria-label", `Cartela ${n}, yours`); }
-      else if (taken.has(n)) { b.disabled = true; b.classList.add("taken"); b.setAttribute("aria-label", `Cartela ${n}, taken`); }
-      else if (!open) b.disabled = true;
-      else {
-        const on = quickSelected.has(n);
-        b.classList.toggle("selected", on);
-        b.setAttribute("aria-pressed", on ? "true" : "false");
-        if (!on && quickSelected.size >= remaining) b.disabled = true;   // limit reached: only ticked ones stay tappable
-        b.addEventListener("click", () => {
-          if (quickSelected.has(n)) quickSelected.delete(n);
-          else if (quickSelected.size < remaining) quickSelected.add(n);
-          renderCartelaPicker();
-        });
+      if (mine.includes(n)) {
+        b.classList.add("mine"); if (n === quickPreviewNo) b.classList.add("previewing"); b.setAttribute("aria-label", `Cartela ${n}, yours - tap to preview`);
+        b.addEventListener("click", () => reserveQuickCartela(room, n));
       }
+      else if (taken.has(n)) { b.disabled = true; b.classList.add("taken"); b.setAttribute("aria-label", `Cartela ${n}, taken`); }
+      else if (!open || remaining === 0) b.disabled = true;   // closed lobby / limit reached
+      else b.addEventListener("click", () => reserveQuickCartela(room, n));
       grid.appendChild(b);
     }
-    const parts = [head, legend, grid];
+    const parts = [head];
+    const shown = quickPreviewNo != null ? quickCards.get(quickPreviewNo) : null;
+    if (shown && open) parts.push(buildQuickPreviewPanel(room, shown, mine.length, maxCards));
+    else quickPreviewNo = null;
+    parts.push(legend, grid);
     if (room.state === "running") {
       const watch = document.createElement("button");
       watch.type = "button"; watch.className = "qp-link"; watch.textContent = "Watch live";
       watch.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
       parts.splice(1, 0, watch);
     }
-    if (open) {
+    if (open && mine.length) {
       const bar = document.createElement("div");
       bar.className = "qp-bar";
-      const count = quickSelected.size;
       const text = document.createElement("span");
-      text.textContent = count
-        ? `${count} selected - ${count * room.stake_amount} ETB`
-        : (remaining === 0 ? `You already hold ${maxCards} cartelas` : `Tap up to ${remaining} cartela${remaining === 1 ? "" : "s"}`);
-      const go = document.createElement("button");
-      go.type = "button"; go.className = "qp-random"; go.textContent = count ? `Reserve ${count}` : "Reserve";
-      go.disabled = count === 0;
-      go.addEventListener("click", () => reserveQuickCartelas(room, [...quickSelected].sort((x, y) => x - y)));
-      bar.append(text, go);
-      if (mine.length && count === 0) {
-        const view = document.createElement("button");
-        view.type = "button"; view.className = "qp-link"; view.textContent = "Open my cartelas";
-        view.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
-        bar.appendChild(view);
-      }
+      text.textContent = `${mine.length} of ${maxCards} reserved - ${mine.length * room.stake_amount} ETB`;
+      const view = document.createElement("button");
+      view.type = "button"; view.className = "qp-random"; view.textContent = "Open room";
+      view.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
+      bar.append(text, view);
       parts.push(bar);
     }
     const y = window.scrollY;
@@ -1147,6 +1208,9 @@ async function populateProfileDrawer() {
 }
 
 // Agents: an existing agent gets a link to the portal; everyone else can ask to become one.
+/** Admin-edited message for the current language (Control Center -> Content), else the built-in wording. */
+function cxOr(key, fallback) { return (window.cxText && window.cxText(key)) || fallback; }
+
 async function renderAgentSection(box) {
   const q = `player_id=${encodeURIComponent(state.playerId)}`;
   let me;
@@ -1173,26 +1237,33 @@ async function renderAgentSection(box) {
   if (application && application.status === "rejected") {
     text.textContent = `Your last request was not approved.${application.review_note ? " " + application.review_note : ""} You can apply again.`;
   } else {
-    text.textContent = "Top up players and earn commission. Send a request and an admin will review it.";
+    text.textContent = cxOr("agent_intro", "Top up players and earn commission. Send your Telegram group or channel and a short description; an admin will check it and review your request.");
   }
-  const note = document.createElement("input");
-  note.type = "text"; note.maxLength = 300; note.placeholder = "Anything we should know? (optional)";
+  const link = document.createElement("input");
+  link.type = "text"; link.maxLength = 200; link.inputMode = "url"; link.autocomplete = "off"; link.autocapitalize = "off";
+  link.placeholder = cxOr("agent_link_hint", "Your Telegram group or channel: https://t.me/yourchannel");
+  link.className = "agent-note";
+  const note = document.createElement("textarea");
+  note.maxLength = 500; note.rows = 3;
+  note.placeholder = cxOr("agent_note_hint", "Describe your group or channel: what it is about and how many members it has");
   note.className = "agent-note";
   const btn = document.createElement("button");
   btn.type = "button"; btn.className = "secondary-btn"; btn.textContent = "Become an agent";
   btn.addEventListener("click", async () => {
+    if (!link.value.trim()) { toast("Enter your Telegram group or channel link", "error"); link.focus(); return; }
+    if (note.value.trim().length < 10) { toast("Please describe your group or channel (at least 10 characters)", "error"); note.focus(); return; }
     btn.disabled = true;
     try {
-      await api(`/api/agent/apply?${q}`, { method: "POST", body: JSON.stringify({ note: note.value.trim() }) });
+      await api(`/api/agent/apply?${q}`, { method: "POST", body: JSON.stringify({ channel_link: link.value.trim(), note: note.value.trim() }) });
       toast("Request sent. An admin will review it soon.", "success");
-      note.remove(); btn.remove();
+      link.remove(); note.remove(); btn.remove();
       text.textContent = "Your agent request is waiting for review.";
     } catch (e) {
       btn.disabled = false;
       toast(e.message, "error");
     }
   });
-  box.append(note, btn);
+  box.append(link, note, btn);
 }
 
 // ---------------------------------------------------------------------
@@ -1457,6 +1528,10 @@ function wireEvents() {
     setHubTab("profile");
     openProfileDrawer();
   });
+  document.getElementById("header-deposit-btn")?.addEventListener("click", () => {
+    setHubTab("deposit");
+    openDepositModal();
+  });
   document.getElementById("withdraw-deposit-btn")?.addEventListener("click", () => {
     closeModal("withdraw-modal");
     setHubTab("deposit");
@@ -1595,31 +1670,6 @@ function lbCountdown(ms) {
   return d > 0 ? `${d}d ${pad(h)}h ${pad(m)}m ${pad(s % 60)}s` : `${pad(h)}:${pad(m)}:${pad(s % 60)}`;
 }
 
-function me_in_band(data, t) {
-  const rank = data.me && data.me.rank;
-  return !!rank && rank >= t.from && rank <= t.to;
-}
-
-function lbWageringTracker(w, fmt) {
-  // Starts full (100% still to wager) the moment the reward is distributed and drains as the player wagers.
-  const left = Math.max(0, Math.min(100, 100 - w.percent));
-  const box = lbEl("div", "lb-reward lb-wager");
-  box.appendChild(lbEl("strong", "", `Wagering tracker · ${w.multiplier}×`));
-  const bar = lbEl("div", "lb-bar"); const fill = lbEl("i"); fill.style.width = `${left}%`; bar.appendChild(fill);
-  box.appendChild(bar);
-  const stats = lbEl("div", "lb-stats lb-stats-3");
-  [["Required", fmt(w.required)], ["Completed", fmt(w.completed)], ["Remaining", fmt(w.remaining)]].forEach(([k, v]) => {
-    const t = lbEl("div", "lb-stat"); t.append(lbEl("span", "", k), lbEl("strong", "", v)); stats.appendChild(t);
-  });
-  box.appendChild(stats);
-  const pct = `${left.toFixed(2).replace(/\.?0+$/, "")}% left to wager · ${w.percent}% completed. `;
-  const status = w.status === "eligible"
-    ? "Wagering complete ✓ - winnings from bonus play are withdrawable."
-    : "Withdrawal locked: only cartela stakes after the reward was credited count toward this.";
-  box.appendChild(lbEl("span", "muted small", pct + status));
-  return box;
-}
-
 async function appendLeaderboardCard(list) {
   if (!list) return;
   let data;
@@ -1652,41 +1702,18 @@ async function appendLeaderboardCard(list) {
     paint();
     if (c.phase === "scheduled" || c.phase === "active") lbTicker = setInterval(paint, 1000);
 
-    const fmt = (n) => Number(n || 0).toLocaleString();
-    const tiers = c.reward_tiers || [];
     body.appendChild(lbEl("p", "muted small",
-      `Every confirmed cartela reservation earns ${c.points_per_cartela} points. Top ${c.winners_count} players share ${fmt(c.budget_etb)} ETB` +
-      `${tiers.length ? `: ${fmt(tiers[0].amount)} ETB for 1st place` : ""}. Ties go to whoever reserved more ETB. ` +
-      `Rewards are play-only bonus credit; after ${c.wagering_multiplier}× wagering, winnings from bonus play become withdrawable.`));
+      `Reserve cartelas during the campaign: ${c.points_per_cartela} points each. Top ${c.winners_count} players share ${Number(c.budget_etb).toLocaleString()} ETB. ` +
+      `Rewards unlock after ${c.wagering_multiplier}× wagering.`));
 
     if (c.phase !== "scheduled") {
       const me = data.me || {};
       const stats = lbEl("div", "lb-stats");
-      [["Rank", me.rank ? `#${me.rank}` : "-"], ["Points", me.points ?? 0], ["Cartelas", me.cartelas ?? 0],
-       ["Est. reward", me.estimated_reward ? `${fmt(me.estimated_reward)} ETB` : "-"]].forEach(([k, v]) => {
+      [["Your points", me.points ?? 0], ["Cartela", me.cartela_points ?? 0], ["Channel", me.channel_points ?? 0], ["Rank", me.rank ? `#${me.rank}` : "-"]].forEach(([k, v]) => {
         const t = lbEl("div", "lb-stat"); t.append(lbEl("span", "", k), lbEl("strong", "", String(v))); stats.appendChild(t);
       });
       body.appendChild(stats);
       if (me.rank) body.appendChild(lbEl("p", me.winning_zone ? "lb-zone in" : "lb-zone", me.winning_zone ? "You are inside the winning places." : `Keep going - the top ${c.winners_count} win.`));
-      const nt = me.next_target;
-      if (nt) {
-        const prize = nt.amount ? ` (${fmt(nt.amount)} ETB)` : "";
-        body.appendChild(lbEl("p", "lb-zone", nt.tie
-          ? `Next target: #${nt.rank}${prize} - you are level on points, reserve more ETB to pass.`
-          : `Next target: #${nt.rank}${prize} - ${fmt(nt.points_needed)} more points (about ${fmt(nt.cartelas_needed)} cartela${nt.cartelas_needed === 1 ? "" : "s"}).`));
-      }
-    }
-
-    if (tiers.length && c.phase !== "scheduled") {
-      const det = document.createElement("details");
-      det.className = "lb-top";
-      det.appendChild(lbEl("summary", "", "Reward ladder"));
-      tiers.forEach((t) => {
-        const r = lbEl("div", me_in_band(data, t) ? "lb-row me" : "lb-row");
-        r.append(lbEl("span", "lb-name", t.from === t.to ? `#${t.from}` : `#${t.from} – #${t.to}`), lbEl("strong", "", `${fmt(t.amount)} ETB`));
-        det.appendChild(r);
-      });
-      body.appendChild(det);
     }
 
     if (c.channel.enabled && c.phase === "active") {
@@ -1741,14 +1768,15 @@ async function appendLeaderboardCard(list) {
     }
   }
 
-  const fmtN = (n) => Number(n || 0).toLocaleString();
-  if (data.wagering && !data.wagering.projected && (data.rewards || []).length) body.appendChild(lbWageringTracker(data.wagering, fmtN));
   (data.rewards || []).forEach((r) => {
     const box = lbEl("div", "lb-reward");
-    box.appendChild(lbEl("strong", "", `Reward: ${fmtN(r.amount)} ETB · rank #${r.rank}`));
+    box.appendChild(lbEl("strong", "", `Reward: ${Number(r.amount).toLocaleString()} ETB · rank #${r.rank}`));
+    const pct = r.wager_required > 0 ? Math.min(100, Math.round((r.wagered / r.wager_required) * 100)) : 100;
+    const bar = lbEl("div", "lb-bar"); const fill = lbEl("i"); fill.style.width = `${pct}%`; bar.appendChild(fill);
+    box.appendChild(bar);
     box.appendChild(lbEl("span", "muted small", r.status === "released"
-      ? `Wagering complete: ${fmtN(r.released)} ETB of bonus winnings is now withdrawable.`
-      : "Play-only bonus credit - use it on Bingo cartelas."));
+      ? `Unlocked: ${Number(r.released).toLocaleString()} ETB is now withdrawable.`
+      : `Wagered ${Number(r.wagered).toLocaleString()} of ${Number(r.wager_required).toLocaleString()} ETB to unlock`));
     body.appendChild(box);
   });
 

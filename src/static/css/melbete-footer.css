@@ -138,3 +138,9 @@ body:has(#room-footer) .cashback-fab { bottom: calc(6.6rem + env(safe-area-inset
   color: #86EFAC; font: 800 .58rem/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
 }
 .tab-withdrawable.off { opacity: .5; }
+
+/* Cashback label on the floating icon: "5% Cashback" */
+.cashback-fab { width: auto; min-width: 38px; padding: 0 .75rem 0 .6rem; border-radius: 999px; grid-auto-flow: column; gap: .35rem; align-items: center; }
+.cashback-fab .cb-text { font: 800 .72rem/1 var(--melbete-font, inherit); white-space: nowrap; letter-spacing: .01em; }
+.cashback-fab .cb-pct { font-weight: 900; }
+.cashback-note { margin: .15rem 0 .6rem; padding: .5rem .7rem; border-radius: 12px; border: 1px solid rgb(255 201 51 / .35); background: rgb(255 201 51 / .1); color: var(--melbete-gold, #FFC933); font-size: .8rem; font-weight: 700; }

@@ -17,6 +17,8 @@ _COLUMNS = (
     "stake_amount_real_10", "stake_amount_real_50", "stake_amount_bonus",
     "bot_enabled_real_10", "bot_enabled_real_50", "bot_enabled_bonus",
     "max_bots_real_10", "max_bots_real_50", "max_bots_bonus",
+    "payout_custom_real_10", "payout_custom_real_50", "payout_custom_bonus",
+    "payout_ratio_real_10", "payout_ratio_real_50", "payout_ratio_bonus",
     "updated_at",
 )
 

@@ -29,9 +29,11 @@ FLAGS = {
     "play": "Joining / playing rounds",
     "bonus_center": "Bonus Center & claims",
     "agent_portal": "Agent portal",
+    "cashback": "Daily cashback",
 }
 
-TEXT_KEYS = ("deposit_intro", "withdraw_intro", "home_note")
+_LANG_TEXTS = ("cashback_note", "agent_intro", "agent_link_hint", "agent_note_hint")
+TEXT_KEYS = ("deposit_intro", "withdraw_intro", "home_note") + tuple(f"{k}_{lang}" for k in _LANG_TEXTS for lang in ("en", "am"))
 
 DEFAULT_MAINTENANCE_MESSAGE = "Melbete Bingo is under maintenance. We'll be back shortly."
 DEFAULT_KILL_MESSAGE = "Money movement and play are temporarily paused. Please check back soon."
@@ -57,6 +59,7 @@ DEFAULT_CONFIG: dict = {
         "banner": {"enabled": False, "tag": "", "title": "", "detail": "", "cta_label": "", "cta_target": "deposit"},
         "texts": {k: "" for k in TEXT_KEYS},
     },
+    "promotions": [],   # timed cashback boosts, see normalize_promotions()
     "alerts": {
         "enabled": True,
         "big_withdrawal_amount": 5000,      # ETB; a withdrawal request at or above this alerts admins (0 = never)
@@ -89,6 +92,12 @@ SETTINGS_SPEC: dict[str, tuple] = {
     "free_credit_amount": (int, 0, 100_000),
     "referral_bonus": (int, 0, 10_000),
     "max_referrals_per_user": (int, 0, 1_000),
+    "payout_custom_real_10": (bool, None, None),
+    "payout_custom_real_50": (bool, None, None),
+    "payout_custom_bonus": (bool, None, None),
+    "payout_ratio_real_10": (float, 0.5, 1.0),
+    "payout_ratio_real_50": (float, 0.5, 1.0),
+    "payout_ratio_bonus": (float, 0.5, 1.0),
     "max_bots_real_10": (int, 0, 200),
     "max_bots_real_50": (int, 0, 200),
     "max_bots_bonus": (int, 0, 200),
@@ -191,6 +200,69 @@ def normalize_settings_overlay(raw: Optional[dict]) -> dict:
         raise ValueError("min_deposit cannot be greater than max_deposit")
     if "min_withdrawal" in out and "max_withdrawal" in out and out["min_withdrawal"] > out["max_withdrawal"]:
         raise ValueError("min_withdrawal cannot be greater than max_withdrawal")
+    return out
+
+
+MAX_PROMOTIONS = 10
+
+
+def _date_str(v: Any, name: str) -> str:
+    v = str(v or "").strip()
+    if not v:
+        return ""
+    try:
+        return datetime.strptime(v[:10], "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        raise ValueError(f"{name} must be a date like 2026-12-31")
+
+
+def _time_str(v: Any, name: str) -> str:
+    v = str(v or "").strip() or "00:00"
+    try:
+        h, m = v.split(":")
+        if not (0 <= int(h) <= 23 and 0 <= int(m) <= 59):
+            raise ValueError
+        return f"{int(h):02d}:{int(m):02d}"
+    except ValueError:
+        raise ValueError(f"{name} must be a time like 18:30")
+
+
+def normalize_promotions(raw: Any) -> list:
+    """Timed cashback boosts. Each: name, enabled, multiplier (1.1 to 5), days (Mon..Sun), optional dates and window."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("promotions must be a list")
+    if len(raw) > MAX_PROMOTIONS:
+        raise ValueError(f"At most {MAX_PROMOTIONS} promotions")
+    out = []
+    for i, p in enumerate(raw, start=1):
+        if not isinstance(p, dict):
+            raise ValueError(f"Promotion {i} is not valid")
+        label = f"Promotion {i}"
+        name = _text(p.get("name", ""), f"{label} name", 40)
+        if not name:
+            raise ValueError(f"{label} needs a name")
+        try:
+            mult = round(float(p.get("multiplier", 2)), 2)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} multiplier must be a number")
+        if not 1.1 <= mult <= 5:
+            raise ValueError(f"{label} multiplier must be between 1.1 and 5")
+        days = p.get("days", [True] * 7)
+        if not isinstance(days, list) or len(days) != 7:
+            raise ValueError(f"{label} days must have 7 entries (Monday to Sunday)")
+        days = [_bool(d, f"{label} day") for d in days]
+        if not any(days):
+            raise ValueError(f"{label} needs at least one day ticked")
+        start_date, end_date = _date_str(p.get("start_date"), f"{label} start date"), _date_str(p.get("end_date"), f"{label} end date")
+        if start_date and end_date and start_date > end_date:
+            raise ValueError(f"{label} ends before it starts")
+        out.append({
+            "name": name, "enabled": _bool(p.get("enabled", True), f"{label} switch"), "applies": ["cashback"],
+            "multiplier": mult, "days": days, "start_date": start_date, "end_date": end_date,
+            "start_time": _time_str(p.get("start_time"), f"{label} start time"), "end_time": _time_str(p.get("end_time"), f"{label} end time"),
+        })
     return out
 
 
@@ -305,6 +377,7 @@ def normalize_config(raw: Optional[dict]) -> dict:
         "failed_logins_before_alert": _int(al.get("failed_logins_before_alert", 3), "alerts.failed_logins_before_alert", 1, 20),
     }
 
+    cfg["promotions"] = normalize_promotions(raw.get("promotions"))
     cfg["settings"] = normalize_settings_overlay(raw.get("settings"))
     return cfg
 
@@ -321,6 +394,10 @@ def _flatten(obj: Any, prefix: str = "") -> dict:
             out[prefix] = {}
         for k, v in obj.items():
             out.update(_flatten(v, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(obj, list) and obj and all(isinstance(v, dict) for v in obj):
+        for i, v in enumerate(obj):
+            out.update(_flatten(v, f"{prefix}.{i + 1}"))
+        out[f"{prefix}.count"] = len(obj)
     else:
         out[prefix] = obj
     return out
@@ -477,6 +554,14 @@ def _announcement_live(an: dict, now: datetime) -> bool:
     return True
 
 
+def _active_promotions_public(cfg: dict, now: datetime) -> list:
+    """Promotions running right now (Ethiopia time), for the player app's cashback label."""
+    from zoneinfo import ZoneInfo
+    from src.services.promotions import active_now
+    local = now.astimezone(ZoneInfo("Africa/Addis_Ababa")).replace(tzinfo=None)
+    return [{"name": p["name"], "multiplier": p["multiplier"], "applies": "cashback"} for p in active_now(cfg.get("promotions", []), local)]
+
+
 def public_view(config: dict, now: Optional[datetime] = None) -> dict:
     """The part of the published config players' apps may see. Never includes limits or rules."""
     cfg = config or DEFAULT_CONFIG
@@ -505,6 +590,7 @@ def public_view(config: dict, now: Optional[datetime] = None) -> dict:
             if banner.get("enabled") and banner.get("title") else None
         ),
         "texts": {k: v for k, v in content.get("texts", {}).items() if v},
+        "promotions": _active_promotions_public(cfg, now),
     }
 
 
@@ -520,13 +606,14 @@ ALERT_TYPES = {
     "wallet_adjust": ("Large wallet adjustments", "Staff add or remove at least the amount set in Alerts."),
     "control_publish": ("Control Center published", "Changes are published or rolled back."),
     "staff_change": ("Staff changes", "Someone is added, removed, promoted or given a new role."),
+    "bonus_budget": ("Bonus budget nearly used", "A bonus campaign has used 80% or 100% of its daily or total budget."),
 }
 # The shared admin group (ADMIN_CHAT_ID), if configured, also gets these.
 ALERT_GROUP_TYPES = frozenset({"big_withdrawal", "fraud_flag", "emergency", "failed_login"})
 ALERT_ROLE_DEFAULTS: dict[str, frozenset] = {
     "super": frozenset(ALERT_TYPES),
-    "manager": frozenset({"big_withdrawal", "fraud_flag", "emergency", "failed_login", "control_publish"}),
-    "finance": frozenset({"big_withdrawal", "fraud_flag", "wallet_adjust"}),
+    "manager": frozenset({"big_withdrawal", "fraud_flag", "emergency", "failed_login", "control_publish", "bonus_budget"}),
+    "finance": frozenset({"big_withdrawal", "fraud_flag", "wallet_adjust", "bonus_budget"}),
     "support": frozenset({"fraud_flag"}),
     "admin": frozenset({"big_withdrawal", "fraud_flag", "emergency"}),
 }
@@ -581,6 +668,11 @@ def format_alert(alert_type: str, d: dict) -> str:
         return f"\U0001F4E2 {d.get('summary', 'Control Center changed')}\nBy {d.get('actor', '?')}"
     if alert_type == "staff_change":
         return f"\U0001F465 Staff change\n{d.get('summary', '')}\nBy {d.get('actor', '?')}"
+    if alert_type == "bonus_budget":
+        icon = "\U0001F6D1" if d.get("level") == 100 else "\u26A0\uFE0F"
+        what = "fully used" if d.get("level") == 100 else "80% used"
+        return (f"{icon} Bonus budget {what}\n{d.get('reward_type', '?')} {d.get('scope', '')} budget: "
+                f"{d.get('used', 0):,} of {d.get('budget', 0):,} ETB")
     if alert_type == "test":
         return "\u2705 Test alert from Melbete Admin. You will receive alerts here."
     return str(d.get("summary", alert_type))

@@ -107,10 +107,6 @@ async def resume_active_room_if_needed():
                 _active_draw_loops.add(room.id)
                 asyncio.create_task(auto_draw_task(room.id))
         elif room.state == "waiting" and room.taken_cartelas and room.countdown_started_at:
-            cards = await room_service.cards.list_by_room(room.id)
-            if len({card.owner_id for card in cards}) < 2:
-                await room_service.rooms.update(room.id, {"countdown_started_at": None})
-                continue
             started_at = room.countdown_started_at
             if started_at.tzinfo is None:
                 started_at = started_at.replace(tzinfo=timezone.utc)
@@ -366,6 +362,9 @@ async def lobby_countdown_task(room_id: str, initial_wait: float | None = None):
     try:
         await _lobby_countdown_inner(room_id, initial_wait)
     finally:
+        # Always free the in-process flag, even if the countdown crashed, otherwise no new
+        # countdown could ever start for this room (select_cartela and the supervisor both skip it).
+        _active_lobby_timers.discard(room_id)
         await loop_lock.release(lock)
 
 
@@ -373,11 +372,6 @@ async def _lobby_countdown_inner(room_id: str, initial_wait: float | None = None
     try:
         room = await get_room_service().get_room(room_id)
     except RoomNotFoundError:
-        _active_lobby_timers.discard(room_id)
-        return
-    cards = await get_room_service().cards.list_by_room(room_id)
-    if len({card.owner_id for card in cards}) < 2:
-        await get_room_service().rooms.update(room_id, {"countdown_started_at": None})
         _active_lobby_timers.discard(room_id)
         return
 
@@ -413,10 +407,17 @@ async def _lobby_countdown_inner(room_id: str, initial_wait: float | None = None
         await asyncio.sleep(remaining)
 
     _active_lobby_timers.discard(room_id)
+    await start_round_and_announce(room_id)
 
+
+async def start_round_and_announce(room_id: str):
+    """Charge the lobby and start the round, tell the room what happened, and start the draw loop.
+
+    Shared by the lobby countdown and the admin "start now" action so both behave identically.
+    Returns (started_room, dropped_player_ids); started_room is None when nothing started."""
     started_room, dropped = await get_room_service().charge_and_start(room_id)
     if started_room is None and not dropped:
-        return  # lobby didn't have enough cartelas - stays open, no countdown running
+        return None, []  # lobby didn't have enough cartelas - stays open, no countdown running
 
     if dropped:
         for player_id in dropped:
@@ -431,7 +432,7 @@ async def _lobby_countdown_inner(room_id: str, initial_wait: float | None = None
             "type": "round_cancelled",
             "message": "Nobody could be charged when the round started. Pick a cartela to start a new round.",
         })
-        return
+        return None, dropped
 
     await manager.broadcast(room_id, {
         "type": "game_started",
@@ -442,6 +443,7 @@ async def _lobby_countdown_inner(room_id: str, initial_wait: float | None = None
     if room_id not in _active_draw_loops:
         _active_draw_loops.add(room_id)
         asyncio.create_task(auto_draw_task(room_id))
+    return started_room, dropped
 
 
 async def auto_draw_task(room_id: str):

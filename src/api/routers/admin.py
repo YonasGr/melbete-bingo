@@ -14,7 +14,7 @@ from src.services.agent_service import AgentError, AgentNotFoundError, AgentAlre
 from src.core.rate_limit import client_ip, enforce as enforce_rate_limit
 from src.core.admin_auth import ADMIN_SESSION_TTL_SECONDS, create_admin_session, verify_totp
 from src.repositories import PlayerRepository
-from src.services import RoomService
+from src.services import InvalidStateError, RoomNotFoundError, RoomService
 from src.services.admin_service import NotSuperAdminError
 from src.services.wallet_service import TransactionNotFoundError
 from src.services.broadcast_service import BroadcastPhoto, BroadcastService, BroadcastValidationError, validate_buttons
@@ -659,6 +659,65 @@ async def admin_list_users(limit: int = 200, search: str = "", admin_id: str = D
     return {"users": out, "total_shown": len(out)}
 
 
+@router.get("/search")
+async def admin_global_search(q: str = "", admin_id: str = Depends(require_admin_dep)):
+    """One search box for the whole panel: players (name, Telegram ID, phone, payout name, player ID) and
+    deposit / withdrawal records (transaction ID, SMS text, payment link, note, payout account, name)."""
+    from src.core.db import get_pool
+    from src.services.admin_search import MIN_QUERY_LENGTH, clean_query, like_pattern, phone_pattern
+
+    text = clean_query(q)
+    if len(text) < MIN_QUERY_LENGTH:
+        return {"query": text, "players": [], "deposits": [], "withdrawals": []}
+    like = like_pattern(text)
+    phone = phone_pattern(text)
+    pool = await get_pool()
+    async with pool.acquire() as c:
+        players = await c.fetch(
+            """
+            SELECT p.id, p.display_name, p.telegram_id, p.phone_number, p.payment_name, p.is_banned,
+                   COALESCE(w.balance, 0) AS balance, COALESCE(w.bonus_balance, 0) AS bonus_balance
+            FROM players p LEFT JOIN wallets w ON w.player_id = p.id
+            WHERE p.display_name ILIKE $1 ESCAPE '\\' OR p.telegram_id ILIKE $1 ESCAPE '\\' OR p.id ILIKE $1 ESCAPE '\\'
+               OR p.payment_name ILIKE $1 ESCAPE '\\' OR p.phone_number ILIKE $1 ESCAPE '\\'
+               OR ($2::text IS NOT NULL AND p.phone_normalized LIKE $2)
+            ORDER BY p.created_at DESC LIMIT 8
+            """, like, phone)
+        txns = await c.fetch(
+            """
+            SELECT t.id, t.player_id, t.type, t.amount, t.payment_method, t.created_at, t.resolved_at,
+                   t.screenshot_url, t.sms_text, t.payment_verification_url, t.admin_id, t.note,
+                   t.legal_name, t.withdrawal_address, p.display_name AS player_name
+            FROM transactions t LEFT JOIN players p ON p.id = t.player_id
+            WHERE t.type IN ('top_up_pending','top_up_approved','top_up_rejected',
+                             'withdrawal_pending','withdrawal_approved','withdrawal_rejected')
+              AND (t.id ILIKE $1 ESCAPE '\\' OR t.sms_text ILIKE $1 ESCAPE '\\' OR t.payment_verification_url ILIKE $1 ESCAPE '\\'
+                   OR t.note ILIKE $1 ESCAPE '\\' OR t.withdrawal_address ILIKE $1 ESCAPE '\\' OR t.legal_name ILIKE $1 ESCAPE '\\')
+            ORDER BY t.created_at DESC LIMIT 10
+            """, like)
+    deposits, withdrawals = [], []
+    for t in txns:
+        name = t["player_name"] or t["player_id"]
+        common = {"id": t["id"], "player_id": t["player_id"], "player_name": name, "payment_method": t["payment_method"],
+                  "created_at": t["created_at"].isoformat(), "resolved_at": t["resolved_at"].isoformat() if t["resolved_at"] else None,
+                  "type": t["type"], "reviewed_by": t["admin_id"], "note": t["note"]}
+        if t["type"].startswith("top_up"):
+            status = "approved" if t["type"] == "top_up_approved" else ("rejected" if t["type"] == "top_up_rejected" else "pending")
+            deposits.append({**common, "amount": t["amount"], "screenshot_url": t["screenshot_url"], "sms_text": t["sms_text"],
+                             "payment_verification_url": t["payment_verification_url"], "status": status})
+        else:
+            status = "approved" if t["type"] == "withdrawal_approved" else ("rejected" if t["type"] == "withdrawal_rejected" else "pending")
+            withdrawals.append({**common, "amount": abs(t["amount"]), "legal_name": t["legal_name"],
+                                "withdrawal_address": t["withdrawal_address"], "status": status})
+    return {
+        "query": text,
+        "players": [{"id": p["id"], "display_name": p["display_name"], "telegram_id": p["telegram_id"],
+                     "phone_number": p["phone_number"], "payment_name": p["payment_name"], "is_banned": p["is_banned"],
+                     "balance": p["balance"], "bonus_balance": p["bonus_balance"]} for p in players],
+        "deposits": deposits, "withdrawals": withdrawals,
+    }
+
+
 @router.post("/users/{player_id}/ban")
 async def admin_ban_user(
     player_id: str,
@@ -842,6 +901,95 @@ async def admin_terminate_game(
         "room_id": ended_room.id,
         "state": ended_room.state,
         "end_reason": ended_room.end_reason,
+    }
+
+
+@router.post("/games/{room_id}/reset-lobby")
+async def admin_reset_lobby(
+    room_id: str,
+    request: Request,
+    payload: dict = Body(default={}),
+    requester: str = Depends(require_super_admin_dep),
+):
+    """Un-stick a waiting lobby: drop every cartela reservation and stop the countdown.
+
+    Nothing is charged while a lobby is waiting (stakes are taken when the round starts), so no refunds
+    are needed. Players stay in the same room and can pick cartelas again."""
+    reason = ((payload or {}).get("reason") or "").strip() or "Lobby reset by admin"
+    svc = get_room_service()
+    try:
+        await svc.get_room(room_id)
+    except RoomNotFoundError:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    async with svc._exclusive_room(room_id):
+        room = await svc.get_room(room_id)
+        if room.state != "waiting":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only a waiting lobby can be reset (current state: {room.state}). "
+                       "Use Terminate for a running round.",
+            )
+        released = len(room.taken_cartelas or [])
+        reset_room = await svc.cancel_round(room_id)
+
+    await manager.broadcast(room_id, {
+        "type": "round_cancelled",
+        "message": "This lobby was reset by an admin. Please pick your cartela again.",
+    })
+    logger.warning("Admin %s reset waiting lobby %s (%d cartelas released): %s", requester, room_id, released, reason)
+    await _audit(request, requester, "game.reset_lobby", target_type="game", target_id=room_id,
+                 summary=f"{reason} ({released} cartela(s) released)")
+    return {"success": True, "room_id": reset_room.id, "state": reset_room.state, "released_cartelas": released}
+
+
+@router.post("/games/{room_id}/force-start")
+async def admin_force_start_game(
+    room_id: str,
+    request: Request,
+    payload: dict = Body(default={}),
+    requester: str = Depends(require_super_admin_dep),
+):
+    """Start a waiting lobby now instead of waiting for its countdown.
+
+    Uses the normal start path: every cartela is charged, anyone who cannot pay is dropped, and the
+    lobby's minimum-cartelas rule still applies."""
+    reason = ((payload or {}).get("reason") or "").strip() or "Started early by admin"
+    svc = get_room_service()
+    try:
+        room = await svc.get_room(room_id)
+    except RoomNotFoundError:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if room.state != "waiting":
+        raise HTTPException(status_code=400, detail=f"Only a waiting lobby can be started (current state: {room.state})")
+
+    from src.api.main import start_round_and_announce
+
+    try:
+        started, dropped = await start_round_and_announce(room_id)
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="The round already started")
+    if started is None:
+        if dropped:
+            await _audit(request, requester, "game.force_start", target_type="game", target_id=room_id,
+                         summary=f"{reason} - nobody could be charged, lobby reset")
+            raise HTTPException(status_code=409, detail="Nobody could be charged, so the lobby was reset")
+        needed = int(getattr(room, "min_cartelas_to_start", 2) or 2)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not enough cartelas to start: {len(room.taken_cartelas or [])} held, {needed} needed",
+        )
+
+    logger.warning("Admin %s force-started room %s: %s", requester, room_id, reason)
+    await _audit(request, requester, "game.force_start", target_type="game", target_id=room_id,
+                 summary=f"{reason} ({len(started.taken_cartelas)} cartela(s), {len(dropped)} dropped)")
+    return {
+        "success": True,
+        "room_id": started.id,
+        "state": started.state,
+        "cartelas": len(started.taken_cartelas),
+        "prize_pool": started.prize_pool,
+        "dropped_players": len(dropped),
     }
 
 

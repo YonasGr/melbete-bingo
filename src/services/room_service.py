@@ -22,6 +22,7 @@ from src.core.config import settings
 from src.models.schemas import Card, Claim, GameRoom
 from src.repositories import CardRepository, ClaimRepository, DrawLogRepository, RoomRepository
 from src.repositories.settings_repository import SettingsRepository
+from src.services.payout_ratio import effective_payout_ratio
 from src.services.game_service import CardGenerator, DrawEngine, PatternVerifier
 from src.services.wallet_service import InsufficientBalanceError, WalletService, funding_parts
 
@@ -118,15 +119,15 @@ class RoomService:
         # taps a cartela button faster than the DB round-trip.
         self._player_locks: dict = {}
 
-    async def _payout_ratio(self) -> float:
+    async def _payout_ratio(self, track: Optional[str] = None) -> float:
         s = await self.settings_repo.get_or_create()
-        return s.payout_ratio
+        return effective_payout_ratio(s, track)
 
-    async def get_payout_ratio(self) -> float:
+    async def get_payout_ratio(self, track: Optional[str] = None) -> float:
         """Public accessor - fraction of the prize pool actually paid to a
         winner after the platform's cut. Used by the API layer to show
         players the real payout instead of the raw total pool."""
-        return await self._payout_ratio()
+        return await self._payout_ratio(track)
 
     # ------------------------------------------------------------------
     # Global session lookup / creation
@@ -410,6 +411,12 @@ class RoomService:
 
             taken = room.taken_cartelas + [cartela_number]
             fields = {"taken_cartelas": taken}
+            min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+            if len(taken) >= min_cartelas and not room.countdown_started_at:
+                # The lobby has enough cartelas (they may all belong to one
+                # player) - the 30s clock starts now.
+                room.countdown_started_at = datetime.now(timezone.utc)
+                fields["countdown_started_at"] = room.countdown_started_at
 
             # Two independent writes to two different documents - same
             # reasoning as the reads above, run them together.
@@ -418,13 +425,6 @@ class RoomService:
                 self.rooms.update(room_id, fields),
             )
             room.taken_cartelas = taken
-            if not room.countdown_started_at:
-                room_cards = await self.cards.list_by_room(room_id)
-                if len({c.owner_id for c in room_cards}) >= 2:
-                    room.countdown_started_at = datetime.now(timezone.utc)
-                    await self.rooms.update(
-                        room_id, {"countdown_started_at": room.countdown_started_at}
-                    )
 
         return room, card
 
@@ -446,10 +446,10 @@ class RoomService:
             if card.cartela_number in room.taken_cartelas:
                 room.taken_cartelas.remove(card.cartela_number)
         fields = {"taken_cartelas": room.taken_cartelas}
-        room_cards = await self.cards.list_by_room(room_id)
-        if len({card.owner_id for card in room_cards}) < 2:
-            # A single player may hold multiple cartelas without starting
-            # the countdown.
+        min_cartelas = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+        if len(room.taken_cartelas) < min_cartelas:
+            # Not enough cartelas any more - stop the clock; it restarts
+            # from the full 30s when the lobby reaches the minimum again.
             fields["countdown_started_at"] = None
             room.countdown_started_at = None
         await self.rooms.update(room_id, fields)
@@ -490,8 +490,10 @@ class RoomService:
 
         cards = await self.cards.list_by_room(room_id)
         s = await self.settings_repo.get_or_create()
-        if len({card.owner_id for card in cards}) < 2:
-            # Defensive: never start a round with only one distinct player.
+        required_cartelas = max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
+        if len(cards) < required_cartelas:
+            # Defensive: the lobby timer only runs with enough cartelas. Leave
+            # the lobby open (waiting) instead of cancelling it.
             return None, []
         charged_cartelas: list[int] = []
         charged_cards: list[tuple[Card, str]] = []
@@ -510,9 +512,10 @@ class RoomService:
                 dropped.append(card.owner_id)
 
         charged_players = {card.owner_id for card, _ in charged_cards}
-        if len({card.owner_id for card, _ in charged_cards}) < 2:
-            # If one player drops out during charging, refund everyone and
-            # leave the lobby waiting for another distinct player.
+        if len(charged_cartelas) < required_cartelas:
+            # A player can lose balance during the countdown and drop below
+            # the minimum number of cartelas; restore every charged stake to
+            # its original pool and reset the lobby instead.
             for card, funded_by in charged_cards:
                 await self.wallets.refund_stake(card.owner_id, room.stake_amount, room_id, funded_by)
             await self.cancel_round(room_id)
@@ -705,7 +708,7 @@ class RoomService:
                 )
                 return ClaimOutcome(True, msg, False, card)
 
-            ratio = await self._payout_ratio()
+            ratio = await self._payout_ratio(getattr(fresh_room, "track", None))
             payout = round(fresh_room.prize_pool * ratio)
 
             # Split the payout by how the WHOLE pool was actually funded,
@@ -848,7 +851,7 @@ class RoomService:
                 except Exception:  # noqa: BLE001 - names are cosmetic, never block a payout
                     logger.exception("Could not resolve winner names for room %s", room_id)
 
-            ratio = await self._payout_ratio()
+            ratio = await self._payout_ratio(getattr(room, "track", None))
             total = round(room.prize_pool * ratio)
             n = len(found)
             share = total // n  # ETB left over from rounding down stays with the house

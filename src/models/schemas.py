@@ -331,6 +331,13 @@ class SystemSettings(BaseModel):
     bot_enabled_real_10: bool = False
     bot_enabled_real_50: bool = False
     bot_enabled_bonus: bool = False
+    # Per-room payout (winner share). The switch decides whether the room uses its own ratio or the shared payout_ratio.
+    payout_custom_real_10: bool = False
+    payout_custom_real_50: bool = False
+    payout_custom_bonus: bool = False
+    payout_ratio_real_10: float = 0.8
+    payout_ratio_real_50: float = 0.8
+    payout_ratio_bonus: float = 0.8
     max_bots_real_10: int = 10
     max_bots_real_50: int = 10
     max_bots_bonus: int = 10

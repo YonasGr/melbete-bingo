@@ -18,7 +18,7 @@
   LOADERS.control = loadControl;
 
   const SECTIONS = [
-    ["games", "Games"], ["money", "Money"], ["content", "Content"], ["switches", "Switches"],
+    ["games", "Games"], ["money", "Money"], ["content", "Content"], ["promotions", "Promotions"], ["switches", "Switches"],
     ["alerts", "Alerts"], ["players", "Players"], ["staff", "Staff"], ["audit", "Audit"],
   ];
   const TRACK_NAMES = { real_10: "Real money · 10 ETB", real_50: "Real money · 50 ETB", bonus: "Bonus balance" };
@@ -29,7 +29,8 @@
     "money.withdrawal_review_above": "Senior review above", "money.auto_approve.enabled": "Auto-approve deposits",
     "money.auto_approve.deposit_max": "Auto-approve up to", "money.auto_approve.min_prior_approved": "Auto-approve needs approved deposits",
     "money.auto_approve.require_verification_url": "Auto-approve needs payment link",
-    "settings.payout_ratio": "Payout ratio (winner share)", "settings.draw_interval": "Seconds between balls",
+    "settings.payout_ratio": "Payout ratio (winner share)", "settings.payout_custom_real_10": "10 ETB room: own commission", "settings.payout_custom_real_50": "50 ETB room: own commission", "settings.payout_custom_bonus": "Bonus room: own commission",
+    "settings.payout_ratio_real_10": "10 ETB room winner share", "settings.payout_ratio_real_50": "50 ETB room winner share", "settings.payout_ratio_bonus": "Bonus room winner share", "settings.draw_interval": "Seconds between balls",
     "settings.lobby_countdown_seconds": "Lobby countdown", "settings.cards_per_player": "Cartelas per player",
     "settings.min_cartelas_to_start": "Cartelas needed to start", "settings.stake_amount_real_10": "Stake (10 ETB room)",
     "settings.min_deposit": "Minimum deposit", "settings.max_deposit": "Maximum deposit",
@@ -111,7 +112,7 @@
   }
   function renderSection() {
     const body = $("cc-body");
-    const fn = { games: gamesHtml, money: moneyHtml, content: contentHtml, switches: switchesHtml, alerts: alertsHtml, players: playersHtml, staff: staffHtml, audit: auditHtml }[cc.section];
+    const fn = { games: gamesHtml, money: moneyHtml, content: contentHtml, promotions: promotionsHtml, switches: switchesHtml, alerts: alertsHtml, players: playersHtml, staff: staffHtml, audit: auditHtml }[cc.section];
     body.innerHTML = `<fieldset class="cc-fieldset" ${["players", "staff", "audit", "switches", "alerts"].includes(cc.section) ? "" : lock()}>${fn()}</fieldset>`;
     if (cc.section === "staff") loadStaff();
     if (cc.section === "alerts") loadAlertsMine();
@@ -129,7 +130,9 @@
         ${field("Message when paused", `games.tracks.${t}.pause_message`, { type: "text", maxlength: 200, hint: "Shown to players who try to join" })}
         <div class="form-grid">${field("Stake", `settings.${stakeKey}`, { unit: "ETB", min: 1 })}
         ${t === "real_10" || t === "real_50" || t === "bonus" ? field("Max bots", `settings.max_bots_${t}`, { min: 0 }) : ""}</div>
-        ${toggle(`settings.bot_enabled_${t}`, "Bots fill this room")}</article>`;
+        ${toggle(`settings.bot_enabled_${t}`, "Bots fill this room")}
+        ${toggle(`settings.payout_custom_${t}`, "Own commission for this room", "Off: the commission under Rules for every game applies")}
+        ${field("This room's commission", `settings.payout_ratio_${t}`, { type: "pct", unit: "% of pool", min: 0, max: 50, hint: "Used only while the switch above is on. Winner receives the rest." })}</article>`;
     }).join("");
     return `<div class="cc-grid">${trackCards}
       <article class="work-panel cc-card"><div class="panel-heading"><div><h3>Rules for every game</h3><p>Timing, commission and cartelas</p></div></div><div class="form-grid">
@@ -175,7 +178,43 @@
         ${field("Deposit instructions", "content.texts.deposit_intro", { type: "text", textarea: true, maxlength: 600 })}
         ${field("Withdrawal notes", "content.texts.withdraw_intro", { type: "text", textarea: true, maxlength: 600 })}
         ${field("Home screen note", "content.texts.home_note", { type: "text", textarea: true, maxlength: 600, hint: "A short line shown above the game list" })}
+        <hr class="cc-hr"><div class="panel-heading"><div><h3>Cashback and agent messages</h3><p>English and Amharic. Leave blank to keep the built-in wording. Use {p} for the cashback percentage.</p></div></div>
+        ${field("Cashback note (English)", "content.texts.cashback_note_en", { type: "text", textarea: true, maxlength: 300, hint: "Shown in the deposit screen" })}
+        ${field("Cashback note (Amharic)", "content.texts.cashback_note_am", { type: "text", textarea: true, maxlength: 300 })}
+        ${field("Agent application intro (English)", "content.texts.agent_intro_en", { type: "text", textarea: true, maxlength: 400, hint: "Shown above the Become an agent form" })}
+        ${field("Agent application intro (Amharic)", "content.texts.agent_intro_am", { type: "text", textarea: true, maxlength: 400 })}
+        ${field("Telegram link hint (English)", "content.texts.agent_link_hint_en", { type: "text", maxlength: 120, hint: "Placeholder in the link box" })}
+        ${field("Telegram link hint (Amharic)", "content.texts.agent_link_hint_am", { type: "text", maxlength: 120 })}
+        ${field("Description hint (English)", "content.texts.agent_note_hint_en", { type: "text", maxlength: 160, hint: "Placeholder in the description box" })}
+        ${field("Description hint (Amharic)", "content.texts.agent_note_hint_am", { type: "text", maxlength: 160 })}
+        <hr class="cc-hr">
         ${field("Support contact", "settings.support_contact", { type: "text", maxlength: 64, hint: "e.g. @melbete_support_1" })}</article></div>`;
+  }
+  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  function promotionsHtml() {
+    const list = cc.draft.promotions || [];
+    const rows = list.map((p, i) => `<article class="work-panel cc-card" data-promo="${i}">
+        <div class="panel-heading"><div><h3>${esc(p.name || "New promotion")}</h3><p>Cashback × ${esc(p.multiplier)} for deposits inside this window</p></div>
+          <button class="btn btn-delete" type="button" data-act="promo-del" data-i="${i}">Remove</button></div>
+        ${toggle(`promotions.${i}.enabled`, "Running", "Turn off to pause without deleting")}
+        <div class="form-grid">${field("Name", `promotions.${i}.name`, { type: "text", maxlength: 40 })}
+          ${field("Cashback multiplier", `promotions.${i}.multiplier`, { type: "float", unit: "×", min: 1.1, max: 5, hint: "2 = double cashback (5% becomes 10%)" })}</div>
+        <div class="field"><label>Days (Ethiopia time)</label><div class="cc-days">${DAY_NAMES.map((d, di) => `<label class="cc-day"><input type="checkbox" data-path="promotions.${i}.days.${di}" data-type="bool" ${p.days && p.days[di] ? "checked" : ""}><span>${d}</span></label>`).join("")}</div></div>
+        <div class="form-grid">${field("From time", `promotions.${i}.start_time`, { type: "text", maxlength: 5, hint: "24-hour, like 18:00. Same start and end = all day" })}
+          ${field("Until time", `promotions.${i}.end_time`, { type: "text", maxlength: 5, hint: "A window like 22:00 to 02:00 runs past midnight" })}
+          ${field("Start date (optional)", `promotions.${i}.start_date`, { type: "text", maxlength: 10, hint: "like 2026-12-01" })}
+          ${field("End date (optional)", `promotions.${i}.end_date`, { type: "text", maxlength: 10, hint: "like 2026-12-31" })}</div></article>`).join("");
+    return `<div class="cc-grid"><article class="work-panel cc-card"><div class="panel-heading"><div><h3>Timed cashback boosts</h3><p>Deposits made inside a promotion earn more cashback. Players still need to leave the money in that day. The best matching promotion applies (they do not stack). Part of the draft: applies when published.</p></div></div>
+      ${list.length < 10 ? `<button class="primary-btn" type="button" data-act="promo-add">Add a promotion</button>` : `<p class="cc-hint">You can have up to 10 promotions.</p>`}</article>${rows}</div>`;
+  }
+  function addPromotion() {
+    cc.draft.promotions = cc.draft.promotions || [];
+    cc.draft.promotions.push({ name: "Friday double cashback", enabled: true, applies: ["cashback"], multiplier: 2, days: [false, false, false, false, true, false, false], start_date: "", end_date: "", start_time: "00:00", end_time: "00:00" });
+    cc.dirty = true; render();
+  }
+  function removePromotion(i) {
+    cc.draft.promotions.splice(i, 1);
+    cc.dirty = true; render();
   }
   function switchesHtml() {
     const pub = cc.snap.published, m = pub.maintenance, k = pub.kill_switch, canEm = can("control.emergency");
@@ -387,6 +426,8 @@
       if (act === "discard") { if (await confirmDialog("Discard draft", "<p>Throw away all unpublished changes?</p>", "Discard", true)) { adopt(await api("/api/admin/control/discard", { method: "POST" })); render(); } return; }
       if (act === "rollback") { if (await confirmDialog("Undo last publish", "<p>Restore the configuration from before the last publish? Settings it changed go back too.</p>", "Undo publish", true)) { adopt(await api("/api/admin/control/rollback", { method: "POST" })); toast("Rolled back", "success"); render(); } return; }
       if (act === "maint" || act === "kill") return await emergency(act);
+      if (act === "promo-add") return addPromotion();
+      if (act === "promo-del") return removePromotion(Number(e.target.closest("[data-i]").dataset.i));
       if (act === "psearch") return await searchPlayers();
       if (act === "aufilter") return await loadAudit(true);
       if (act === "aumore") return await loadAudit(false);

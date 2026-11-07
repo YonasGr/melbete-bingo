@@ -93,7 +93,7 @@ async def agent_my_application(
     if not app:
         return {"application": None}
     return {"application": {
-        "status": app["status"], "note": app.get("note", ""), "review_note": app.get("review_note", ""),
+        "status": app["status"], "note": app.get("note", ""), "channel_link": app.get("channel_link", ""), "review_note": app.get("review_note", ""),
         "created_at": app["created_at"].isoformat(),
     }}
 
@@ -108,7 +108,8 @@ async def agent_apply(
     await _auth(player_id, x_telegram_init_data)
     enforce_rate_limit("agent_apply", player_id)
     try:
-        app = await get_agent_service().apply(player_id, (payload or {}).get("note", ""))
+        app = await get_agent_service().apply(
+            player_id, channel_link=(payload or {}).get("channel_link", ""), note=(payload or {}).get("note", ""))
     except AgentError as e:
         raise _http(e)
     return {"message": "Request sent - an admin will review it soon", "status": app["status"]}

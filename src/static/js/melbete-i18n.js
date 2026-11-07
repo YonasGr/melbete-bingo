@@ -20,6 +20,7 @@
       splash_tag: "Play. Win. Cash out.", lang_switch: "Change language", close: "Close",
       // deposit modal
       dep_title: "💳 Deposit",
+      cb_label: "Cashback", dep_cb_note: "Don't withdraw today and get {p}% of today's deposits back tomorrow as bonus credit.",
       dep_intro: "Choose a payment method, send the money, then attach the transaction SMS and a screenshot so your payment is confirmed quickly.",
       dep_s1: "Choose the payment method you will send money with",
       dep_s2: "Enter the amount you sent",
@@ -44,7 +45,7 @@
       wd_foot: "An admin reviews every withdrawal request and then sends the payment by hand once confirmed.",
       wd_limits: "Min {min} ETB · Max {max} ETB per request. Money you deposit is for playing; it can't be withdrawn directly.",
       wd_box_title: "Withdrawable balance", wd_box_note: "Only your winnings can be withdrawn.", wd_max: "Max",
-      bal_withdrawable: "Withdrawable", hist_playable: "Available to play", hist_withdrawable: "Withdrawable", hist_bonus: "Bonus (play only)",
+      bal_withdrawable: "Withdrawable", hist_playable: "Available to play", hist_withdrawable: "Withdrawable", hist_bonus: "Bonus",
       tt_wd_none: "You have no winnings to withdraw yet.", tt_wd_over: "You can withdraw up to {n} ETB right now.", tt_wd_range: "Withdrawals are {min} to {max} ETB.",
       // progress bar labels
       st_method: "Method", st_amount: "Amount", st_proof: "Proof", st_account: "Account", st_details: "Details",
@@ -119,6 +120,7 @@
       game_name: "ቢንጎ", game_desc: "የቀጥታ የማህበረሰብ ዙሮች", play: "ይጫወቱ",
       splash_tag: "ይጫወቱ። ያሸንፉ። ገንዘብዎን ይውሰዱ።", lang_switch: "ቋንቋ ቀይር", close: "ዝጋ",
       dep_title: "💳 ገንዘብ ማስገቢያ",
+      cb_label: "ካሽባክ", dep_cb_note: "ዛሬ ገንዘብ ካላወጡ ከዛሬ ተቀማጭዎ {p}% ነገ እንደ ቦነስ ይመለስልዎታል።",
       dep_intro: "የመክፈያ ዘዴዎን ይምረጡ፣ ገንዘቡን ይላኩ፣ ከዚያም ክፍያዎ በፍጥነት እንዲረጋገጥ የግብይቱን ኤስኤምኤስ እና ስክሪንሾት ያያይዙ።",
       dep_s1: "ገንዘብ የሚልኩበትን የመክፈያ ዘዴ ይምረጡ",
       dep_s2: "የላኩትን የገንዘብ መጠን ያስገቡ",
@@ -142,7 +144,7 @@
       wd_foot: "የገንዘብ ማውጣት ጥያቄዎችን አስተዳዳሪ ይመረምራል፤ ከተረጋገጠ በኋላም ክፍያውን በእጅ ይፈጽማል።",
       wd_limits: "ዝቅተኛው {min} ብር · ከፍተኛው {max} ብር። ያስገቡትን ገንዘብ ለጨዋታ መጠቀም ይችላሉ፤ በቀጥታ ማውጣት ግን አይችሉም።",
       wd_box_title: "ማውጣት የሚችሉት ሂሳብ", wd_box_note: "ማውጣት የሚችሉት ያሸነፉትን ገንዘብ ብቻ ነው።", wd_max: "ሁሉንም",
-      bal_withdrawable: "ማውጣት የሚቻል", hist_playable: "ለጨዋታ የሚውል", hist_withdrawable: "ማውጣት የሚቻል", hist_bonus: "ቦነስ (ለጨዋታ ብቻ)",
+      bal_withdrawable: "ማውጣት የሚቻል", hist_playable: "ለጨዋታ የሚውል", hist_withdrawable: "ማውጣት የሚቻል", hist_bonus: "ቦነስ",
       tt_wd_none: "ለማውጣት የሚሆን ያሸነፉት ገንዘብ እስካሁን የለዎትም።", tt_wd_over: "አሁን ማውጣት የሚችሉት እስከ {n} ብር ነው።", tt_wd_range: "የማውጫ መጠን ከ{min} እስከ {max} ብር ነው።",
       st_method: "ዘዴ", st_amount: "መጠን", st_proof: "ማረጋገጫ", st_account: "ሂሳብ", st_details: "መረጃ",
       rc_title_dep: "የገንዘብ ማስገቢያ ጥያቄ ተልኳል", rc_title_wd: "የገንዘብ ማውጫ ጥያቄ ተልኳል",

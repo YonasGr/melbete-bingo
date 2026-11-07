@@ -244,6 +244,12 @@ class AdminService:
             "max_bots_real_10",
             "max_bots_real_50",
             "max_bots_bonus",
+            "payout_custom_real_10",
+            "payout_custom_real_50",
+            "payout_custom_bonus",
+            "payout_ratio_real_10",
+            "payout_ratio_real_50",
+            "payout_ratio_bonus",
         }
         clean = {k: v for k, v in fields.items() if k in allowed and v is not None}
         await self._validate_settings_patch(clean)
@@ -274,6 +280,15 @@ class AdminService:
             if not lo <= n <= hi:
                 raise ValueError(f"{label} must be between {lo} and {hi}")
             clean[key] = n
+        for key in ("payout_ratio_real_10", "payout_ratio_real_50", "payout_ratio_bonus"):
+            if key in clean:
+                try:
+                    ratio = float(clean[key])
+                except (TypeError, ValueError):
+                    raise ValueError("Payout ratio must be a number")
+                if not 0.5 <= ratio <= 1.0:
+                    raise ValueError("Payout ratio must be between 0.5 and 1.0")
+                clean[key] = ratio
         if "min_players_to_start" in clean and int(clean["min_players_to_start"]) < 1:
             raise ValueError("min_players_to_start must be at least 1")
         curr = await self.get_settings()

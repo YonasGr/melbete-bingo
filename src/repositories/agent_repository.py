@@ -100,16 +100,16 @@ class AgentRepository(BaseRepository):
         return Agent(**row) if row else None
 
     # ---------------------------------------------------------------- registration requests
-    async def create_application(self, player_id: str, note: str) -> Optional[dict]:
+    async def create_application(self, player_id: str, note: str, channel_link: str = "") -> Optional[dict]:
         """None when this player already has a pending application (one open request each)."""
         return await self._fetchrow(
             """
-            INSERT INTO agent_applications (id, player_id, note, status, created_at)
-            VALUES ($1, $2, $3, 'pending', $4)
+            INSERT INTO agent_applications (id, player_id, note, channel_link, status, created_at)
+            VALUES ($1, $2, $3, $5, 'pending', $4)
             ON CONFLICT DO NOTHING
             RETURNING *
             """,
-            new_id(), player_id, note, utcnow(),
+            new_id(), player_id, note, utcnow(), channel_link,
         )
 
     async def pending_application_count(self) -> int:

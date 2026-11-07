@@ -59,23 +59,30 @@ async def admin_bonus_campaigns(request: Request):
     pool = await get_pool()
     state = await pool.fetchrow('SELECT globally_enabled FROM bonus_campaign_state WHERE id=1')
     rows = await pool.fetch('SELECT * FROM bonus_campaigns ORDER BY reward_type')
-    return {'globally_enabled': bool(state['globally_enabled']) if state else False, 'campaigns':[dict(r) for r in rows]}
+    usage = await service.budget_usage()
+    campaigns = []
+    for r in rows:
+        d = dict(r)
+        d.update(usage.get(r['reward_type'], {'today_etb': 0, 'total_etb': 0, 'today_count': 0}))
+        campaigns.append(d)
+        service.schedule_budget_check(r['reward_type'])   # keeps 80% / 100% alerts honest for rewards paid elsewhere
+    return {'globally_enabled': bool(state['globally_enabled']) if state else False, 'campaigns': campaigns}
 
 @router.put('/api/admin/bonus/campaigns/{reward_type}')
 async def update_bonus_campaign(reward_type: str, request: Request, payload: dict = Body(...)):
     admin_id = await require_super_admin_dep(request)
-    if reward_type not in {'welcome','referral','daily','first_deposit'}:
+    if reward_type not in {'welcome','referral','daily','first_deposit','cashback'}:
         raise HTTPException(404, 'Unknown reward type')
     reason = str(payload.get('reason') or '').strip()
     if len(reason) < 8:
         raise HTTPException(400, 'A change reason of at least 8 characters is required')
-    allowed = {'amount_etb','enabled','starts_at','ends_at','daily_budget_etb','total_budget_etb','per_player_cap'}
+    allowed = {'amount_etb','enabled','starts_at','ends_at','daily_budget_etb','total_budget_etb','per_player_cap','per_player_daily_max_etb'}
     changes = {k:payload[k] for k in allowed if k in payload}
-    for k in ('amount_etb','daily_budget_etb','total_budget_etb','per_player_cap'):
-        if k in changes and (not isinstance(changes[k],int) or changes[k] < (1 if k in ('amount_etb','per_player_cap') else 0)):
+    for k in ('amount_etb','daily_budget_etb','total_budget_etb','per_player_cap','per_player_daily_max_etb'):
+        if k in changes and (isinstance(changes[k], bool) or not isinstance(changes[k],int) or changes[k] < (1 if k in ('amount_etb','per_player_cap') else 0)):
             raise HTTPException(400, f'Invalid {k}')
-    if reward_type == 'first_deposit' and 'amount_etb' in changes and changes['amount_etb'] > 100:
-        raise HTTPException(400, 'First-deposit reward percentage must be between 1 and 100')
+    if reward_type in ('first_deposit','cashback') and 'amount_etb' in changes and changes['amount_etb'] > 100:
+        raise HTTPException(400, 'Reward percentage must be between 1 and 100')
     if not changes: raise HTTPException(400, 'No campaign changes supplied')
     pool = await get_pool()
     async with pool.acquire() as c:
@@ -89,6 +96,48 @@ async def update_bonus_campaign(reward_type: str, request: Request, payload: dic
             after = await c.fetchrow('SELECT * FROM bonus_campaigns WHERE reward_type=$1', reward_type)
             await c.execute('INSERT INTO bonus_admin_audit(admin_telegram_id,action,target_type,target_id,before_json,after_json,reason) VALUES($1,$2,$3,$4,$5,$6,$7)', admin_id,'update_campaign','bonus_campaign',reward_type,_json_safe(before),_json_safe(after),reason)
     return {'campaign':dict(after)}
+
+@router.get('/api/admin/bonus/cashback/players')
+async def cashback_player_rules(request: Request):
+    await require_super_admin_dep(request)
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT r.player_id, r.excluded, r.daily_cap_etb, r.reason, r.updated_by, r.updated_at, p.display_name, p.phone_number "
+                            "FROM cashback_player_rules r LEFT JOIN players p ON p.id=r.player_id ORDER BY r.updated_at DESC LIMIT 200")
+    return {'rules': [dict(r) for r in rows]}
+
+
+@router.put('/api/admin/bonus/cashback/players/{player_id}')
+async def set_cashback_player_rule(player_id: str, request: Request, payload: dict = Body(...)):
+    """Exclude a player from cashback and/or give them their own daily cap. Both off = rule removed."""
+    admin_id = await require_super_admin_dep(request)
+    reason = str(payload.get('reason') or '').strip()
+    if len(reason) < 8:
+        raise HTTPException(400, 'A reason of at least 8 characters is required')
+    excluded = payload.get('excluded', False)
+    cap = payload.get('daily_cap_etb')
+    if not isinstance(excluded, bool):
+        raise HTTPException(400, 'excluded must be true or false')
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+        raise HTTPException(400, 'daily_cap_etb must be a whole number of 1 or more, or empty')
+    pool = await get_pool()
+    async with pool.acquire() as c:
+        async with c.transaction():
+            if not await c.fetchval('SELECT EXISTS(SELECT 1 FROM players WHERE id=$1)', player_id):
+                raise HTTPException(404, 'Player not found')
+            before = await c.fetchrow('SELECT excluded, daily_cap_etb, reason FROM cashback_player_rules WHERE player_id=$1 FOR UPDATE', player_id)
+            if not excluded and cap is None:
+                await c.execute('DELETE FROM cashback_player_rules WHERE player_id=$1', player_id)
+                after = {}
+            else:
+                await c.execute(
+                    "INSERT INTO cashback_player_rules(player_id,excluded,daily_cap_etb,reason,updated_by,updated_at) VALUES($1,$2,$3,$4,$5,now()) "
+                    "ON CONFLICT(player_id) DO UPDATE SET excluded=EXCLUDED.excluded, daily_cap_etb=EXCLUDED.daily_cap_etb, reason=EXCLUDED.reason, updated_by=EXCLUDED.updated_by, updated_at=now()",
+                    player_id, excluded, cap, reason, admin_id)
+                after = {'excluded': excluded, 'daily_cap_etb': cap}
+            await c.execute('INSERT INTO bonus_admin_audit(admin_telegram_id,action,target_type,target_id,before_json,after_json,reason) VALUES($1,$2,$3,$4,$5,$6,$7)',
+                            admin_id, 'cashback_player_rule', 'player', player_id, _json_safe(dict(before) if before else {}), after, reason)
+    return {'player_id': player_id, **({'excluded': excluded, 'daily_cap_etb': cap} if after else {'removed': True})}
+
 
 @router.put('/api/admin/bonus/global')
 async def set_bonus_global(request: Request, payload: dict = Body(...)):

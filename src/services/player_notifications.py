@@ -76,6 +76,10 @@ TEMPLATES: dict[str, tuple[str, Callable[[dict], str], Callable[[dict], str]]] =
         "🎉", lambda d: "Agent reward paid",
         lambda d: f"{_etb(d.get('amount'))} was added to your commission balance ({'new player' if d.get('reward_type') == 'new_player' else 'player retention'} reward).",
     ),
+    "cashback_granted": (
+        "\U0001F4B8", lambda d: f"{d.get('percent')}% cashback: {_etb(d.get('amount'))}",
+        lambda d: f"You did not withdraw on {d.get('day')}, so {_etb(d.get('amount'))} was added to your bonus balance (playable, not withdrawable).",
+    ),
     "agent_application_approved": (
         "🎉", lambda d: "You are now a Melbete agent",
         lambda d: f"Your agent request was approved. Open the Agent portal from your profile to start. Your commission is {d.get('percent')}%.",

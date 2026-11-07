@@ -10,9 +10,7 @@ Pure helpers (parsing, phases, reward split) are module-level functions so they 
 """
 from __future__ import annotations
 
-import json
 import logging
-import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -98,89 +96,6 @@ def _whole(payload: dict, key: str, label: str, lo: int, hi: int, default=None) 
     return n
 
 
-# The monthly reward ladder: 250 winners share 100,000 ETB. Each band is {"from": rank, "to": rank, "amount": ETB each}.
-DEFAULT_REWARD_TIERS = [
-    {"from": 1, "to": 1, "amount": 20000}, {"from": 2, "to": 2, "amount": 10000}, {"from": 3, "to": 3, "amount": 5000},
-    {"from": 4, "to": 10, "amount": 1000}, {"from": 11, "to": 50, "amount": 600}, {"from": 51, "to": 100, "amount": 400},
-    {"from": 101, "to": 200, "amount": 100}, {"from": 201, "to": 250, "amount": 80},
-]
-
-
-def parse_tiers(raw) -> Optional[list]:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except ValueError:
-            return None
-    return raw if isinstance(raw, list) and raw else None
-
-
-def tiers_total(tiers: list) -> int:
-    return sum((int(t["to"]) - int(t["from"]) + 1) * int(t["amount"]) for t in tiers)
-
-
-def validate_tiers(raw, budget: int) -> list:
-    """Bands must start at rank 1, follow each other without gaps or overlaps, and never add up to more than the budget."""
-    if not isinstance(raw, list) or not 1 <= len(raw) <= 60:
-        raise LeaderboardError("Add between 1 and 60 reward bands.")
-    out, expected = [], 1
-    for i, t in enumerate(raw, start=1):
-        if not isinstance(t, dict):
-            raise LeaderboardError(f"Reward band {i} is not valid.")
-        lo = _whole(t, "from", f"Band {i} first rank", 1, 10_000)
-        hi = _whole(t, "to", f"Band {i} last rank", 1, 10_000)
-        amount = _whole(t, "amount", f"Band {i} reward", 0, 100_000_000)
-        if lo != expected:
-            raise LeaderboardError(f"Band {i} must start at rank {expected:,} - ranks cannot have gaps or overlap.")
-        if hi < lo:
-            raise LeaderboardError(f"Band {i}: the last rank must not be lower than the first rank.")
-        out.append({"from": lo, "to": hi, "amount": amount})
-        expected = hi + 1
-    total = tiers_total(out)
-    if total > budget:
-        raise LeaderboardError(f"The bands add up to {total:,} ETB, which is more than the {budget:,} ETB budget.")
-    return out
-
-
-def tier_for_rank(tiers: Optional[list], rank: int) -> Optional[dict]:
-    for t in tiers or []:
-        if t["from"] <= rank <= t["to"]:
-            return t
-    return None
-
-
-def split_ladder(tiers: list, standings: list[dict]) -> list[dict]:
-    """Each ranked player gets the amount of their band. Ranks nobody reached simply pay nothing."""
-    out = []
-    for i, w in enumerate(standings, start=1):
-        t = tier_for_rank(tiers, i)
-        if t is None:
-            break
-        if int(t["amount"]) > 0:
-            out.append({"rank": i, "player_id": w["player_id"], "points": int(w["points"]), "amount": int(t["amount"]),
-                        "display_name": w.get("display_name")})
-    return out
-
-
-def wagering_summary(rewards: list[dict], multiplier: int, estimated: int = 0) -> dict:
-    """Player-facing wagering tracker. Required = reward x multiplier; only stakes charged after the credit count."""
-    live = [r for r in rewards if r["status"] == "locked"]
-    rows = live or rewards
-    required = sum(int(r["wager_required"]) for r in rows)
-    completed = sum(min(int(r["wagered"]), int(r["wager_required"])) for r in rows)
-    if not rows:
-        projected = max(0, int(estimated)) * int(multiplier)
-        return {"status": "none", "multiplier": multiplier, "required": projected, "completed": 0, "remaining": projected,
-                "percent": 0.0, "bonus_won": 0, "projected": True}
-    status = "in_progress" if live else "eligible"
-    return {"status": status, "multiplier": multiplier, "required": required, "completed": completed,
-            "remaining": max(0, required - completed), "percent": round(100.0 * completed / required, 2) if required else 100.0,
-            "bonus_won": sum(int(r.get("bonus_won", 0)) for r in rows), "projected": False}
-
-
-
 def validate_campaign(payload: dict, base: Optional[dict] = None) -> dict:
     """Normalise admin input (merged over `base` when editing) into the database values."""
     p = dict(payload or {})
@@ -206,18 +121,10 @@ def validate_campaign(payload: dict, base: Optional[dict] = None) -> dict:
         raise LeaderboardError("Enter the channel's public username, for example @melbete_news (5-32 letters, numbers or _).")
     if channel and not _CHANNEL_RE.match(channel):
         raise LeaderboardError("That channel username is not valid.")
-    budget = _whole(merged, "budget_etb", "Reward budget", 1, 100_000_000)
-    tiers = parse_tiers(merged.get("reward_tiers"))
-    if merged.get("reward_tiers") is not None and tiers is None:
-        raise LeaderboardError("Add at least one reward band.")
-    if tiers is not None:
-        tiers = validate_tiers(tiers, budget)
-        winners = tiers[-1]["to"]                      # the ladder decides how many players win
-    else:
-        winners = _whole(merged, "winners_count", "Number of winners", 1, 10_000)
     return {
         "name": name, "timezone": tz_name, "starts_at": starts, "ends_at": ends,
-        "budget_etb": budget, "winners_count": winners, "reward_tiers": tiers,
+        "budget_etb": _whole(merged, "budget_etb", "Reward budget", 1, 100_000_000),
+        "winners_count": _whole(merged, "winners_count", "Number of winners", 1, 10_000),
         "points_per_cartela": _whole(merged, "points_per_cartela", "Points per cartela", 1, 1_000),
         "wagering_multiplier": _whole(merged, "wagering_multiplier", "Wagering requirement", 0, 1_000),
         "channel_enabled": enabled, "channel_username": channel,
@@ -257,7 +164,6 @@ class LeaderboardService:
     # ------------------------------------------------------------------ admin: campaigns
     def _admin_json(self, c: dict, now: datetime) -> dict:
         out = {k: (_iso(v) if isinstance(v, datetime) else v) for k, v in c.items()}
-        out["reward_tiers"] = parse_tiers(c.get("reward_tiers"))
         out["phase"] = campaign_phase(c, now)
         out["starts_local"] = to_local_text(c["starts_at"], c["timezone"])
         out["ends_local"] = to_local_text(c["ends_at"], c["timezone"])
@@ -349,23 +255,19 @@ class LeaderboardService:
         c = await self._get(campaign_id)
         now = utcnow()
         standings = await self.repo.standings(campaign_id, max(c["winners_count"], 50))
-        tiers = parse_tiers(c.get("reward_tiers"))
-        preview = split_ladder(tiers, standings) if tiers else split_rewards(c["budget_etb"], standings, c["winners_count"])
+        preview = split_rewards(c["budget_etb"], standings, c["winners_count"])
         rewards = await self.repo.list_rewards(campaign_id)
         return {
             "campaign": self._admin_json(c, now),
             "participants": await self.repo.participant_count(campaign_id),
             "standings": [{"rank": i + 1, "player_id": s["player_id"], "name": s["display_name"], "points": s["points"],
-                           "cartela_points": s["cartela_points"], "channel_points": s["channel_points"],
-                           "cartelas": s["cartelas"], "reserved_etb": s["reserved_etb"]} for i, s in enumerate(standings[:50])],
+                           "cartela_points": s["cartela_points"], "channel_points": s["channel_points"]} for i, s in enumerate(standings[:50])],
             "preview": [{"rank": r["rank"], "player_id": r["player_id"], "name": r["display_name"], "points": r["points"], "amount": r["amount"]}
                         for r in preview[:50]],
             "preview_total": sum(r["amount"] for r in preview),
             "rewards": [{"rank": r["rank"], "player_id": r["player_id"], "name": r["display_name"], "points": r["points"],
-                         "amount": r["amount_etb"], "wagered": r["wagered"], "wager_required": r["wager_required"], "status": r["status"],
-                         "percent": round(100.0 * min(r["wagered"], r["wager_required"]) / r["wager_required"], 2) if r["wager_required"] else 100.0,
-                         "bonus_won": r.get("bonus_won", 0), "released": r["released_etb"]}
-                        for r in rewards[:250]],
+                         "amount": r["amount_etb"], "wagered": r["wagered"], "wager_required": r["wager_required"], "status": r["status"]}
+                        for r in rewards[:200]],
             "channel_claims": [{**{k: (_iso(v) if isinstance(v, datetime) else v) for k, v in row.items()}} for row in await self.repo.channel_claims(campaign_id)],
             "failed_attempts": [{**{k: (_iso(v) if isinstance(v, datetime) else v) for k, v in row.items()}} for row in await self.repo.list_attempts(campaign_id, 50)],
         }
@@ -383,9 +285,7 @@ class LeaderboardService:
         if claimed is None:
             raise LeaderboardError("This campaign was already decided.")
         standings = await self.repo.standings(campaign_id, claimed["winners_count"])
-        tiers = parse_tiers(claimed.get("reward_tiers"))
-        planned = split_ladder(tiers, standings) if tiers else split_rewards(claimed["budget_etb"], standings, claimed["winners_count"])
-        for r in planned:
+        for r in split_rewards(claimed["budget_etb"], standings, claimed["winners_count"]):
             if r["amount"] <= 0:
                 continue
             await self.repo.insert_reward(campaign_id, r["player_id"], r["rank"], r["points"], r["amount"],
@@ -449,7 +349,7 @@ class LeaderboardService:
                 owners.add(card.owner_id)
                 if campaign and campaign["starts_at"] <= card.created_at < campaign["ends_at"]:
                     await self.repo.add_points(campaign["id"], card.owner_id, "cartela", campaign["points_per_cartela"],
-                                               f"cartela:{card.id}", f"cartela {card.cartela_number}", stake_etb=int(stake))
+                                               f"cartela:{card.id}", f"cartela {card.cartela_number}")
                 await self.repo.add_wagered(card.owner_id, int(stake))
             for owner in owners:
                 await self._release_due(owner)
@@ -465,13 +365,12 @@ class LeaderboardService:
                 continue
             try:
                 wallet = await wallets.get_or_create_wallet(player_id)
-                # The reward itself stays play-only bonus; only what bonus-funded play won while it was locked turns withdrawable.
-                moved = min(int(wallet.bonus_balance), int(r.get("bonus_won") or 0))
+                moved = min(int(wallet.bonus_balance), int(r["amount_etb"]))
                 if moved > 0:
                     wallet = await wallets.wallet_repo.apply_delta(player_id, balance=moved, won=moved, bonus=-moved)
                     await wallets.transaction_repo.create(Transaction(
                         player_id=player_id, type="leaderboard_release", amount=moved, balance_after=wallet.balance, status="completed",
-                        note=f"Wagering of {r['wager_required']} ETB complete - {moved} ETB won from bonus play is now withdrawable",
+                        note=f"Leaderboard reward unlocked after {r['wager_required']} ETB wagered - {moved} ETB is now withdrawable",
                     ))
                 await self.repo.finish_release(r["id"], moved)
             except Exception:  # noqa: BLE001
@@ -485,22 +384,16 @@ class LeaderboardService:
         if c is None:
             latest = await self.repo.get_latest_ended(now)
             c = latest if latest and now - latest["ends_at"] < timedelta(days=30) else None
-        reward_rows = await self.repo.player_rewards(player_id)
         rewards = [{"campaign": r["campaign_name"], "rank": r["rank"], "amount": r["amount_etb"], "wagered": r["wagered"],
-                    "wager_required": r["wager_required"], "status": r["status"], "released": r["released_etb"],
-                    "bonus_won": r.get("bonus_won", 0)}
-                   for r in reward_rows]
+                    "wager_required": r["wager_required"], "status": r["status"], "released": r["released_etb"]}
+                   for r in await self.repo.player_rewards(player_id)]
         if c is None:
-            return {"campaign": None, "now": _iso(now), "rewards": rewards,
-                    "wagering": wagering_summary(reward_rows, 0) if reward_rows else None}
+            return {"campaign": None, "now": _iso(now), "rewards": rewards}
         phase = campaign_phase(c, now)
         me = await self.repo.player_standing(c["id"], player_id)
         top = await self.repo.standings(c["id"], 10) if phase != "scheduled" else []
         history = await self.repo.player_history(c["id"], player_id) if phase != "scheduled" else []
         claimed = any(h["source"] == "channel" for h in history)
-        tiers = parse_tiers(c.get("reward_tiers"))
-        estimated = int(tier_for_rank(tiers, me["rank"])["amount"]) if (me and tiers and tier_for_rank(tiers, me["rank"])) else 0
-        next_target = await self._next_target(c, tiers, me) if (me and phase == "active") else None
         return {
             "now": _iso(now),
             "campaign": {
@@ -508,38 +401,15 @@ class LeaderboardService:
                 "starts_at": _iso(c["starts_at"]), "ends_at": _iso(c["ends_at"]),
                 "budget_etb": c["budget_etb"], "winners_count": c["winners_count"], "points_per_cartela": c["points_per_cartela"],
                 "wagering_multiplier": c["wagering_multiplier"],
-                "reward_tiers": tiers,
                 "channel": {"enabled": bool(c["channel_enabled"]), "username": c["channel_username"] if c["channel_enabled"] else "",
                             "points": c["channel_points"], "claimed": claimed},
             },
             "me": {"points": me["points"], "cartela_points": me["cartela_points"], "channel_points": me["channel_points"], "rank": me["rank"],
-                   "cartelas": me["cartelas"], "reserved_etb": me["reserved_etb"], "estimated_reward": estimated,
-                   "next_target": next_target, "winning_zone": me["rank"] <= c["winners_count"]}
-                  if me else {"points": 0, "cartela_points": 0, "channel_points": 0, "rank": None, "cartelas": 0, "reserved_etb": 0,
-                              "estimated_reward": 0, "next_target": None, "winning_zone": False},
-            "wagering": wagering_summary(reward_rows, c["wagering_multiplier"], estimated),
+                   "winning_zone": me["rank"] <= c["winners_count"]} if me else {"points": 0, "cartela_points": 0, "channel_points": 0, "rank": None, "winning_zone": False},
             "top": [{"rank": i + 1, "name": mask_name(t["display_name"]), "points": t["points"], "is_me": t["player_id"] == player_id} for i, t in enumerate(top)],
             "history": [{"source": h["source"], "points": h["points"], "entries": h["entries"], "at": _iso(h["last_at"]), "revoked": h["revoked"]} for h in history],
             "rewards": rewards,
         }
-
-    async def _next_target(self, c: dict, tiers: Optional[list], me: dict) -> Optional[dict]:
-        """The nearest better reward band: how many points (and cartelas) separate the player from its last place."""
-        rank = int(me["rank"])
-        if rank <= 1:
-            return None
-        band = tier_for_rank(tiers, rank) if tiers else None
-        target_rank = band["from"] - 1 if band else (c["winners_count"] if rank > c["winners_count"] else rank - 1)
-        if target_rank < 1:
-            return None
-        target = await self.repo.standing_at_rank(c["id"], target_rank)
-        if target is None:
-            return None
-        need = max(0, int(target["points"]) - int(me["points"]))
-        per = max(1, int(c["points_per_cartela"]))
-        better = tier_for_rank(tiers, target_rank) if tiers else None
-        return {"rank": target_rank, "amount": int(better["amount"]) if better else None, "points_needed": need,
-                "cartelas_needed": math.ceil(need / per), "tie": need == 0}
 
     async def claim_channel(self, player_id: str) -> dict:
         from src.repositories.player_repository import PlayerRepository

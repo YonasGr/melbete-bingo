@@ -35,7 +35,10 @@
       <span class="wallet-amount"><strong id="balance-real">0</strong> <small>ETB</small></span>
     </button>
     <div class="topbar-actions">
-    <button id="lang-toggle-btn" class="lang-toggle" type="button" aria-label="Change language">EN</button>
+    <button id="header-deposit-btn" class="header-deposit-btn" type="button" aria-label="Deposit">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>
+      <span data-i18n="tab_deposit">Deposit</span>
+    </button>
     <button id="header-profile-btn" class="header-profile-btn" type="button" aria-label="Open profile">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
     </button>
@@ -110,6 +113,7 @@
   <!-- Small floating Cashback icon (bottom right, above the footer pill). -->
   <button id="cashback-fab" class="cashback-fab hidden" type="button" aria-label="Cashback" title="Cashback">
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 11-2.4-5.7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 4v4.2h-4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.2 14.8l5.6-5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9.4" cy="9.6" r="1.3" fill="currentColor"/><circle cx="14.6" cy="14.4" r="1.3" fill="currentColor"/></svg>
+    <span class="cb-text"><b class="cb-pct">5%</b> <span class="cb-word">Cashback</span></span>
     <span id="cashback-dot" class="tab-dot hidden"></span>
   </button>
 
@@ -120,6 +124,7 @@
       <button class="modal-close" data-close="deposit-modal" aria-label="ዝጋ">&times;</button>
       <h3 id="deposit-modal-title" data-i18n="dep_title">💳 ገንዘብ ማስገቢያ</h3>
       <p class="muted small" data-i18n="dep_intro">የመክፈያ ዘዴዎን ይምረጡ፣ ገንዘቡን ይላኩ፣ ከዚያም ክፍያዎ በፍጥነት እንዲረጋገጥ የግብይቱን ኤስኤምኤስ እና ስክሪንሾት ያያይዙ።</p>
+      <p id="deposit-cashback-note" class="cashback-note"></p>
 
       <div class="payment-step">
         <span class="payment-step-badge">1</span>
@@ -277,6 +282,10 @@
         <span class="muted small">Your account is safe across devices</span>
       </span>
     </div>
+    <div class="profile-drawer-footer">
+      <span class="pdf-label" data-i18n="lang_switch">Change language</span>
+      <button id="lang-toggle-btn" class="lang-toggle" type="button" aria-label="Change language">EN</button>
+    </div>
   </aside>
 
   <!-- Link Telegram Account modal -->
@@ -308,6 +317,17 @@
       </div>
     </div>
   </div>
+<div id="cartela-preview-sheet" class="cartela-sheet hidden" role="dialog" aria-modal="true" aria-label="Cartela preview">
+  <div class="cartela-sheet-backdrop" id="cartela-sheet-backdrop"></div>
+  <div class="cartela-sheet-panel">
+    <div id="cartela-sheet-card" class="cartela-sheet-card"></div>
+    <p id="cartela-sheet-note" class="muted small"></p>
+    <div class="cartela-sheet-actions">
+      <button id="cartela-sheet-cancel" type="button" class="primary-btn">Done</button>
+      <button id="cartela-sheet-confirm" type="button" class="secondary-btn">Remove this cartela</button>
+    </div>
+  </div>
+</div>
   <div id="toast" class="toast hidden"></div>
 </div>
 
@@ -315,6 +335,7 @@
 <script src="/static/js/melbete-core.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/melbete-i18n.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/gameselect.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/melbete-back.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/inbox.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/melbete-premium.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/melbete-control.js?v={{ APP_VERSION }}" defer></script>

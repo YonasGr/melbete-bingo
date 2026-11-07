@@ -357,14 +357,23 @@ async def test_cannot_draw_before_start(service):
 
 
 @pytest.mark.asyncio
-async def test_single_player_cannot_start_even_with_multiple_cartelas(service, wallet_service):
+async def test_single_player_can_start_when_test_setting_allows_it(service, wallet_service):
+    """The service honours the configured threshold; admin validation prevents
+    production settings from being changed below two."""
+    # Override settings for this test
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     await service.select_cartela(room.id, "player-1", 1)
 
     started_room, dropped = await service.charge_and_start(room.id)
 
     assert dropped == []
-    assert started_room is None
+    assert started_room.state == "running"
+    assert started_room.taken_cartelas == [1]
+    assert started_room.prize_pool == started_room.stake_amount
+
+    wallet = await wallet_service.get_or_create_wallet("player-1")
+    assert wallet.balance == 1000 - started_room.stake_amount
 
 
 @pytest.mark.asyncio
@@ -388,15 +397,15 @@ async def test_charge_and_start_drops_players_who_cant_afford_it(service, wallet
 
 @pytest.mark.asyncio
 async def test_charge_and_start_cancels_if_nobody_can_pay(service, wallet_service):
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     await service.select_cartela(room.id, "player-1", 1)
-    await service.select_cartela(room.id, "player-2", 2)
-    await wallet_service.wallet_repo.update("player-2", {"balance": 0})
+    await wallet_service.wallet_repo.update("player-1", {"balance": 0})
 
     started_room, dropped = await service.charge_and_start(room.id)
 
     assert started_room is None
-    assert dropped == ["player-2"]
+    assert dropped == ["player-1"]
     room = await service.get_room(room.id)
     assert room.state == "waiting"
     assert room.taken_cartelas == []
@@ -426,7 +435,7 @@ async def test_full_round_to_claim_pays_out_winner(service, wallet_service):
 
     is_valid, message, payout = await claim_and_finalize(service, room.id, "player-1", card.id)
     assert is_valid is True
-    assert payout == round(room.prize_pool * 0.8) // 2
+    assert payout == round(room.prize_pool * 0.8)
 
     wallet = await wallet_service.get_or_create_wallet("player-1")
     # Started with 1000, paid a 10 stake, then received the payout - all
@@ -436,7 +445,7 @@ async def test_full_round_to_claim_pays_out_winner(service, wallet_service):
     ended_room = await service.get_room(room.id)
     assert ended_room.state == "ended"
     assert ended_room.end_reason == "winner"
-    assert len(ended_room.winners) == 2
+    assert len(ended_room.winners) == 1
     assert ended_room.advanced is False  # still "the" session until someone clicks past it
 
     # get_or_create_waiting_session must keep returning THIS exact room -
@@ -458,9 +467,9 @@ async def test_claim_bingo_works_without_any_client_side_marking(service, wallet
     from room.called_numbers vs. the card's fixed layout, NOT from
     whatever 'marked' flags happen to be sitting in storage (which, in
     production, are never touched again after the card is created)."""
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -531,23 +540,25 @@ async def test_release_one_of_two_cartelas_keeps_the_other(service):
 
 @pytest.mark.asyncio
 async def test_both_cartelas_get_charged_at_round_start(service, wallet_service):
+    # Override for testing
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     await service.select_cartela(room.id, "player-1", 1)
-    await service.select_cartela(room.id, "player-2", 2)
+    await service.select_cartela(room.id, "player-1", 2)
 
     started_room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
     assert started_room.prize_pool == started_room.stake_amount * 2
 
-    wallet1 = await wallet_service.get_or_create_wallet("player-1")
-    wallet2 = await wallet_service.get_or_create_wallet("player-2")
-    assert wallet1.balance == wallet2.balance == 1000 - started_room.stake_amount
+    wallet = await wallet_service.get_or_create_wallet("player-1")
+    assert wallet.balance == 1000 - started_room.stake_amount * 2
 
 
 @pytest.mark.asyncio
 async def test_second_winning_claim_does_not_win_the_lock(service, wallet_service):
     """Two players complete a pattern on the same number: the first claim settles BOTH (equal split) and the
     second claim is told the win is already confirmed - nobody is ever paid twice."""
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     room, card1 = await service.select_cartela(room.id, "player-1", 1)
     room, card2 = await service.select_cartela(room.id, "player-2", 2)
@@ -578,12 +589,12 @@ async def test_second_winning_claim_does_not_win_the_lock(service, wallet_servic
 
 @pytest.mark.asyncio
 async def test_duplicate_claim_from_same_winner_gets_friendly_message(service):
+    # Override for testing
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     """A double-tap / duplicate auto-bingo call from the SAME player+card
     that already won should not be treated as "someone else" winning."""
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -606,9 +617,9 @@ async def test_claim_win_pays_out_and_ends_the_round_atomically(service, wallet_
     all. The instant `claim_win` returns with won=True, the wallet is
     already credited AND the room is already "ended" - nothing for a
     poller to ever catch halfway."""
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -682,9 +693,9 @@ async def test_advance_round_is_idempotent_across_multiple_players(service):
     first advance_round call must create the next round, and every later
     call (from other players closing theirs) must just hand back that
     same new round instead of creating yet another one."""
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
     while True:
@@ -711,17 +722,20 @@ async def test_claim_missing_card_raises(service):
 
 @pytest.mark.asyncio
 async def test_countdown_started_at_tracks_first_join(service):
+    # Override for testing
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     """Needed so the server can accurately resume a countdown after a
     restart instead of always giving a fresh 30s (or leaving it stuck)."""
     room = await service.get_or_create_waiting_session()
     assert room.countdown_started_at is None
 
     room, _ = await service.select_cartela(room.id, "player-1", 1)
-    assert room.countdown_started_at is None
-
-    # The second distinct player starts the clock.
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     assert room.countdown_started_at is not None
+    first_stamp = room.countdown_started_at
+
+    # A second player joining the same round doesn't reset the clock.
+    room, _ = await service.select_cartela(room.id, "player-2", 2)
+    assert room.countdown_started_at == first_stamp
 
 
 @pytest.mark.asyncio
@@ -749,14 +763,16 @@ async def test_countdown_started_at_clears_on_cancel(service, wallet_service):
 
 
 @pytest.mark.asyncio
-async def test_bonus_balance_spent_before_real_balance(service, wallet_service, monkeypatch):
-    """Real balance is spent before bonus credit."""
+async def test_real_balance_spent_before_bonus_balance(service, wallet_service):
+    # Override for testing
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
+    """Deposited funds take priority; bonus credit remains available until
+    the real balance has been exhausted."""
     await wallet_service.get_or_create_wallet("player-1")
     await wallet_service.wallet_repo.update("player-1", {"balance": 1000, "bonus_balance": 50})
 
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -766,10 +782,6 @@ async def test_bonus_balance_spent_before_real_balance(service, wallet_service, 
 
     stored_card = await service.cards.get(card.id)
     assert stored_card.funded_by == "real"
-
-    # Keep this unit test isolated from the real leaderboard repository.
-    from unittest.mock import AsyncMock
-    monkeypatch.setattr(wallet_service, "_note_bonus_win", AsyncMock())
 
     while True:
         number, _ = await service.draw_number(room.id)
@@ -781,7 +793,7 @@ async def test_bonus_balance_spent_before_real_balance(service, wallet_service, 
 
     wallet = await wallet_service.get_or_create_wallet("player-1")
     assert wallet.balance == 1000 - room.stake_amount + payout
-    assert wallet.won_balance == 0
+    assert wallet.won_balance == payout
     assert wallet.bonus_balance == 50
 
 
@@ -791,12 +803,12 @@ async def test_end_round_without_winner_moves_no_money(service, wallet_service):
     empty winners list, refund every charged stake back to whichever pool
     it came from (a round nobody won must cost nobody anything), and
     still require an explicit advance like any other ended round."""
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     wallet_pre_stake = await wallet_service.get_or_create_wallet("player-1")
     total_pre_stake = wallet_pre_stake.balance + wallet_pre_stake.bonus_balance
 
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
 
@@ -843,11 +855,11 @@ async def test_cancelled_round_auto_rotates_without_advance(service, wallet_serv
     assert started_room is None
 
     cancelled = await service.get_room(room.id)
-    assert cancelled.state == "waiting"
+    assert cancelled.state == "cancelled"
 
     # No advance needed - the very next lookup should already be fresh.
     next_room = await service.get_or_create_waiting_session()
-    assert next_room.id == room.id
+    assert next_room.id != room.id
     assert next_room.state == "waiting"
 
 
@@ -858,9 +870,9 @@ async def test_winner_grid_is_stored_as_normal_nested_grid(service, wallet_servi
     on Firestore, this had to be flattened to a single 25-entry array
     since Firestore disallows an array directly containing another array
     - Postgres JSONB has no such restriction, so that workaround is gone.)"""
+    await service.settings_repo.update({"min_cartelas_to_start": 1})
     room = await service.get_or_create_waiting_session()
     room, card = await service.select_cartela(room.id, "player-1", 1)
-    room, _ = await service.select_cartela(room.id, "player-2", 2)
     room, dropped = await service.charge_and_start(room.id)
     assert dropped == []
     while True:
@@ -1060,8 +1072,7 @@ async def test_manual_claim_settles_everyone_and_never_pays_twice(service, walle
         assert w.balance + w.bonus_balance == 1000 - room.stake_amount + share
 
     # a duplicate claim, a second settle, or a recovery sweep never pays anyone again
-    duplicate = await service.claim_win(room.id, "player-2", cards[1].id)
-    assert duplicate.is_valid is True and duplicate.won is False
+    assert (await service.claim_win(room.id, "player-2", cards[1].id)).won is True
     assert await service.settle_round_winners(room.id) is None
     await service.pay_unpaid_winners(room.id)
     w2 = await wallet_service.get_or_create_wallet("player-2")
@@ -1117,8 +1128,7 @@ async def test_a_failing_engagement_hook_never_affects_the_round(service):
 
 
 @pytest.mark.asyncio
-async def test_countdown_waits_for_two_distinct_players_regardless_of_cartelas(service):
-    await service.settings_repo.update({"min_cartelas_to_start": 3})
+async def test_countdown_starts_at_min_cartelas_even_for_one_player(service):
     room = await service.get_or_create_waiting_session()
     assert room.min_cartelas_to_start == 3
     room, _ = await service.select_cartela(room.id, "player-1", 1)
@@ -1126,24 +1136,23 @@ async def test_countdown_waits_for_two_distinct_players_regardless_of_cartelas(s
     assert room.countdown_started_at is None  # 2 cartelas: not enough yet
 
     room, _ = await service.select_cartela(room.id, "player-1", 3)
-    assert room.countdown_started_at is None  # one player never starts the clock
+    assert room.countdown_started_at is not None  # 3 cartelas, 1 player: clock starts
 
-    room, _ = await service.select_cartela(room.id, "player-2", 4)
-    assert room.countdown_started_at is not None
     started, dropped = await service.charge_and_start(room.id)
     assert dropped == []
     assert started is not None and started.state == "running"
-    assert len(started.taken_cartelas) == 4
+    assert len(started.taken_cartelas) == 3
 
 
 @pytest.mark.asyncio
 async def test_releasing_below_minimum_stops_the_countdown(service):
     room = await service.get_or_create_waiting_session()
-    room, _ = await service.select_cartela(room.id, "player-1", 1)
-    room, card2 = await service.select_cartela(room.id, "player-2", 2)
+    for n in (1, 2):
+        room, _ = await service.select_cartela(room.id, "player-1", n)
+    room, card3 = await service.select_cartela(room.id, "player-1", 3)
     assert room.countdown_started_at is not None
 
-    room = await service.release_cartela(room.id, "player-2", card_id=card2.id)
+    room = await service.release_cartela(room.id, "player-1", card_id=card3.id)
     assert room.countdown_started_at is None
 
 

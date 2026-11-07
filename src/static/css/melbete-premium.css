@@ -512,6 +512,4 @@ html body #loading-view .melbete-splash {
 .mission-info { display: grid; gap: .25rem; min-width: 0; }
 .mission-row .lb-done { color: #86EFAC; font-weight: 700; }
 
-.lb-stats-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.lb-wager { background: rgb(212 175 55 / .08); border-color: rgb(212 175 55 / .4); }
-.lb-wager .lb-bar i { background: linear-gradient(90deg, #D4AF37, #F5D77A); }
+.profile-agent textarea.agent-note { resize: vertical; min-height: 4.2rem; font: inherit; }

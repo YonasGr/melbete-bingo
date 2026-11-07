@@ -23,7 +23,7 @@ window.state = state;
 const TAB_TITLES = {
   dashboard: "Dashboard", deposits: "Deposits", withdrawals: "Withdrawals",
   economy: "Economy", reconciliation: "Reconciliation", games: "Games History", users: "User Directory",
-  referrals: "Referrals", agents: "Agents", leaderboard: "Leaderboard", broadcast: "Broadcast", payments: "Payment Methods",
+  referrals: "Referrals", bonuses: "Bonuses & Cashback", agents: "Agents", leaderboard: "Leaderboard", broadcast: "Broadcast", payments: "Payment Methods",
   admins: "Admins", settings: "System Settings",
 };
 const TAB_CONTEXT = {
@@ -35,6 +35,7 @@ const TAB_CONTEXT = {
   games: "Monitor and audit Bingo",
   users: "Search players and manage account access",
   referrals: "Invitation performance and bonus distribution",
+  bonuses: "Reward switches, amounts, budgets and cashback rules",
   agents: "Reseller float, commission and player top-ups",
   leaderboard: "Campaign dates, rewards, wagering and channel claims",
   broadcast: "Compose and monitor Telegram announcements",
@@ -176,6 +177,7 @@ const LOADERS = {
   },
   users: () => loadUsers(),
   referrals: loadReferrals,
+  bonuses: loadBonuses,
   agents: loadAgents,
   leaderboard: loadLeaderboard,
   payments: loadPaymentMethods,
@@ -589,6 +591,44 @@ async function terminateGame(roomId, btn) {
   }
 }
 
+async function resetLobby(roomId, btn) {
+  if (!roomId) return;
+  const reason = prompt(
+    "Reset this lobby? Every cartela reservation is released and the countdown stops.\n" +
+    "Nobody has been charged yet, so no refunds are needed. Reason (optional):"
+  );
+  if (reason === null) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Resetting…";
+  try {
+    const res = await api(`/api/admin/games/${roomId}/reset-lobby`, { method: "POST", body: JSON.stringify({ reason }) });
+    toast(`Lobby reset (${res.released_cartelas} cartela(s) released).`, "success");
+    await Promise.all([loadOverviewStats(), loadGames()]);
+  } catch (e) {
+    toast(e.message || "Failed to reset lobby", "error");
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function forceStartGame(roomId, btn) {
+  if (!roomId) return;
+  if (!confirm("Start this round now? Every held cartela is charged immediately and players who cannot pay are dropped.")) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Starting…";
+  try {
+    const res = await api(`/api/admin/games/${roomId}/force-start`, { method: "POST", body: JSON.stringify({}) });
+    toast(`Round started: ${res.cartelas} cartela(s), pool ${money(res.prize_pool)}.`, "success");
+    await Promise.all([loadOverviewStats(), loadGames()]);
+  } catch (e) {
+    toast(e.message || "Failed to start round", "error");
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 async function deleteGame(roomId, btn) {
   if (!roomId) return;
   if (!confirm("Are you sure you want to delete this waiting room? This will permanently remove the room and all associated reserved card selections.")) return;
@@ -639,7 +679,10 @@ async function loadGames(filter = state.currentGameFilter) {
       if (g.state === "running" && !g.terminated && state.isSuperAdmin) {
         actionsHtml = `<div class="rc-actions"><button class="btn-terminate" data-action="terminate-game" data-id="${g.id}">⛔ Terminate round</button></div>`;
       } else if (g.state === "waiting" && state.isSuperAdmin) {
-        actionsHtml = `<div class="rc-actions"><button class="btn-delete" data-action="delete-game" data-id="${g.id}">🗑️ Delete waiting room</button></div>`;
+        actionsHtml = `<div class="rc-actions">` +
+          `<button class="btn-terminate" data-action="force-start-game" data-id="${g.id}">▶️ Start now</button>` +
+          `<button class="btn-terminate" data-action="reset-lobby" data-id="${g.id}">🔄 Reset lobby</button>` +
+          `<button class="btn-delete" data-action="delete-game" data-id="${g.id}">🗑️ Delete waiting room</button></div>`;
       }
       return recordCard({
         id: g.id,
@@ -809,9 +852,10 @@ function renderUserManageOverview(u) {
 }
 
 function populateUserResetForm(u) {
-  document.getElementById("um-balance").value = u.balance;
-  document.getElementById("um-won-balance").value = u.won_balance;
-  document.getElementById("um-bonus-balance").value = u.bonus_balance;
+  const cur = document.getElementById("um-current-balances");
+  if (cur) cur.textContent = `Now: real ${money(u.balance)} · winnings ${money(u.won_balance)} · bonus ${money(u.bonus_balance)}`;
+  document.getElementById("um-adjust-kind").value = "real";
+  document.getElementById("um-adjust-delta").value = "";
   document.getElementById("um-reset-note").value = "";
 }
 
@@ -898,28 +942,30 @@ function wireUserManageModal() {
   document.getElementById("um-reset-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const playerId = document.getElementById("um-reset-player-id").value;
-    const balance = Number(document.getElementById("um-balance").value);
-    const wonBalance = Number(document.getElementById("um-won-balance").value);
-    const bonusBalance = Number(document.getElementById("um-bonus-balance").value);
+    const kind = document.getElementById("um-adjust-kind").value;
+    const delta = parseInt(document.getElementById("um-adjust-delta").value, 10);
     const note = document.getElementById("um-reset-note").value.trim();
     const submitBtn = e.target.querySelector('button[type="submit"]');
     if (submitBtn) submitBtn.disabled = true;
     try {
-      const res = await api(`/api/admin/users/${encodeURIComponent(playerId)}/reset-balance`, {
+      if (!Number.isInteger(delta) || delta === 0) throw new Error("Enter a non-zero whole amount (negative to remove).");
+      if (note.length < 3) throw new Error("A reason of at least 3 characters is required.");
+      const res = await api(`/api/admin/users/${encodeURIComponent(playerId)}/wallet-adjust`, {
         method: "POST",
-        body: JSON.stringify({ balance, won_balance: wonBalance, bonus_balance: bonusBalance, note }),
+        body: JSON.stringify({ kind, delta, reason: note }),
       });
-      toast("Balances updated successfully!", "success");
+      toast("Wallet adjusted.", "success");
       if (_selectedUserForManage && _selectedUserForManage.id === playerId) {
         _selectedUserForManage.balance = res.balance;
         _selectedUserForManage.won_balance = res.won_balance;
         _selectedUserForManage.bonus_balance = res.bonus_balance;
         renderUserManageOverview(_selectedUserForManage);
+        populateUserResetForm(_selectedUserForManage);
       }
       await loadUsers();
       switchUserModalTab("overview");
     } catch (err) {
-      toast(err.message || "Failed to update balances", "error");
+      toast(err.message || "Failed to adjust wallet", "error");
     } finally {
       if (submitBtn) submitBtn.disabled = false;
     }
@@ -1048,7 +1094,10 @@ async function loadAgentApplications() {
       title: `${escapeHtml(a.display_name || a.telegram_id)} <span class="muted small">${escapeHtml(a.telegram_id)}</span>`,
       statusHtml: `<span class="status-pill">Pending</span>`,
       meta: [a.phone_number ? escapeHtml(a.phone_number) : "", `Deposited ${money(a.lifetime_deposited)}`, a.is_banned ? "Banned" : "", escapeHtml(new Date(a.created_at).toLocaleString())],
-      extraHtml: a.note ? `<div class="muted small">“${escapeHtml(a.note)}”</div>` : "",
+      extraHtml: (a.channel_link
+          ? `<div class="small"><strong>Telegram:</strong> <a href="${escapeHtml(a.channel_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.channel_link)}</a></div>`
+          : `<div class="muted small">No Telegram link submitted (older request)</div>`) +
+        (a.note ? `<div class="muted small">“${escapeHtml(a.note)}”</div>` : ""),
       actionsHtml: `<div class="rc-actions">
         <button class="btn btn-approve" data-action="agent-app-approve" data-id="${a.id}">Approve</button>
         <button class="btn btn-delete" data-action="agent-app-reject" data-id="${a.id}">Reject</button>
@@ -1965,6 +2014,8 @@ document.addEventListener("click", async (e) => {
   if (action === "manage-user") { const u = findUserById(id); if (u) openUserManageModal(u); return; }
   if (action === "terminate-game") { terminateGame(id, btn); return; }
   if (action === "delete-game") { deleteGame(id, btn); return; }
+  if (action === "reset-lobby") { resetLobby(id, btn); return; }
+  if (action === "force-start-game") { forceStartGame(id, btn); return; }
   if (action === "edit-method") {
     const m = _paymentMethods.find((x) => x.id === id);
     if (m) {
@@ -2042,6 +2093,7 @@ document.addEventListener("click", async (e) => {
    =========================================================================== */
 async function main() {
   wireNav();
+  wireGlobalSearch();
   wireTopbarRefresh();
   wireAuditFilterButtons();
   wireFinanceTools();
@@ -2107,58 +2159,6 @@ main();
    =========================================================================== */
 const LB_PHASE = { scheduled: "Scheduled", active: "Running", ended: "Ended - awaiting your decision", distributed: "Rewards paid", rejected: "Rejected", cancelled: "Cancelled" };
 let lbCampaigns = [];
-const LB_DEFAULT_TIERS = [
-  { from: 1, to: 1, amount: 20000 }, { from: 2, to: 2, amount: 10000 }, { from: 3, to: 3, amount: 5000 }, { from: 4, to: 10, amount: 1000 },
-  { from: 11, to: 50, amount: 600 }, { from: 51, to: 100, amount: 400 }, { from: 101, to: 200, amount: 100 }, { from: 201, to: 250, amount: 80 },
-];
-let lbTiers = LB_DEFAULT_TIERS.map((t) => ({ ...t }));
-let lbTiersLocked = false;
-
-function lbTiersTotal() { return lbTiers.reduce((sum, t) => sum + Math.max(0, t.to - t.from + 1) * (Number(t.amount) || 0), 0); }
-
-function lbPaintTierSummary() {
-  let next = 1;
-  lbTiers.forEach((t) => { t.from = next; next = Math.max(t.to, t.from) + 1; });
-  document.querySelectorAll("#lb-tiers .lb-tier-from").forEach((el, i) => { el.textContent = `#${lbTiers[i].from}`; });
-  const total = lbTiersTotal(), budget = Number(document.getElementById("lb-budget").value) || 0;
-  const winners = lbTiers.length ? lbTiers[lbTiers.length - 1].to : Number(document.getElementById("lb-winners").value) || 0;
-  if (lbTiers.length) document.getElementById("lb-winners").value = winners;   // legacy campaigns keep their stored winner count
-  const sum = document.getElementById("lb-tier-sum");
-  sum.textContent = `${winners} winners · ladder total ${money(total)} of ${money(budget)} budget${total > budget ? " - over budget!" : total < budget ? ` (${money(budget - total)} unallocated)` : ""}`;
-  sum.style.color = total > budget ? "#f87171" : "";
-}
-
-function lbRenderTiers() {
-  const box = document.getElementById("lb-tiers");
-  if (!box) return;
-  box.innerHTML = lbTiers.map((t, i) => `<div class="lb-tier-row">
-      <span class="lb-tier-from">#${t.from}</span><span>to</span>
-      <input class="lb-tier-to" data-i="${i}" inputmode="numeric" value="${t.to}" aria-label="Last rank of band ${i + 1}" ${lbTiersLocked ? "disabled" : ""}>
-      <input class="lb-tier-amount" data-i="${i}" inputmode="numeric" value="${t.amount}" aria-label="ETB each in band ${i + 1}" ${lbTiersLocked ? "disabled" : ""}><span>ETB each</span>
-      <button type="button" class="btn btn-delete lb-tier-del" data-i="${i}" ${lbTiersLocked || lbTiers.length < 2 ? "disabled" : ""} aria-label="Remove band ${i + 1}">✕</button></div>`).join("");
-  ["lb-tier-add", "lb-tier-default"].forEach((id) => { const b = document.getElementById(id); if (b) b.disabled = lbTiersLocked; });
-  lbPaintTierSummary();
-}
-
-document.getElementById("lb-tiers")?.addEventListener("input", (e) => {
-  const i = Number(e.target.dataset.i);
-  if (Number.isNaN(i) || !lbTiers[i]) return;
-  if (e.target.classList.contains("lb-tier-to")) lbTiers[i].to = Number(e.target.value) || 0;
-  if (e.target.classList.contains("lb-tier-amount")) lbTiers[i].amount = Number(e.target.value) || 0;
-  lbPaintTierSummary();
-});
-document.getElementById("lb-tiers")?.addEventListener("click", (e) => {
-  const del = e.target.closest(".lb-tier-del");
-  if (!del || del.disabled) return;
-  lbTiers.splice(Number(del.dataset.i), 1); lbRenderTiers();
-});
-document.getElementById("lb-tier-add")?.addEventListener("click", () => {
-  const last = lbTiers[lbTiers.length - 1];
-  lbTiers.push({ from: (last ? last.to : 0) + 1, to: (last ? last.to : 0) + 10, amount: last ? last.amount : 100 }); lbRenderTiers();
-});
-document.getElementById("lb-tier-default")?.addEventListener("click", () => { lbTiers = LB_DEFAULT_TIERS.map((t) => ({ ...t })); lbRenderTiers(); });
-document.getElementById("lb-budget")?.addEventListener("input", lbPaintTierSummary);
-lbRenderTiers();
 
 async function loadLeaderboard() {
   const list = document.getElementById("lb-list");
@@ -2173,7 +2173,7 @@ async function loadLeaderboard() {
         id: c.id,
         title: escapeHtml(c.name),
         statusHtml: `<span class="status-pill">${escapeHtml(LB_PHASE[c.phase] || c.phase)}</span>`,
-        meta: [`${escapeHtml(c.starts_local.replace("T", " "))} → ${escapeHtml(c.ends_local.replace("T", " "))} (${escapeHtml(c.timezone)})`, `${money(c.budget_etb)} · ${c.winners_count} winners${c.reward_tiers ? " · rank ladder" : ""}`, `${c.points_per_cartela} pts/cartela · ${c.wagering_multiplier}× wagering`, c.channel_enabled ? `Channel @${escapeHtml(c.channel_username)} +${c.channel_points}` : "No channel reward"],
+        meta: [`${escapeHtml(c.starts_local.replace("T", " "))} → ${escapeHtml(c.ends_local.replace("T", " "))} (${escapeHtml(c.timezone)})`, `${money(c.budget_etb)} · ${c.winners_count} winners`, `${c.points_per_cartela} pts/cartela · ${c.wagering_multiplier}× wagering`, c.channel_enabled ? `Channel @${escapeHtml(c.channel_username)} +${c.channel_points}` : "No channel reward"],
         actionsHtml: `<div class="rc-actions">
           <button class="btn" data-action="lb-detail" data-id="${c.id}">Standings &amp; rewards</button>
           ${extendable ? `<button class="btn" data-action="lb-extend" data-id="${c.id}">Extend end date</button>` : ""}
@@ -2189,7 +2189,6 @@ function lbFormValues() {
   return {
     name: num("lb-name"), timezone: num("lb-tz"), starts_at: num("lb-start"), ends_at: num("lb-end"),
     budget_etb: Number(num("lb-budget")), winners_count: Number(num("lb-winners")), points_per_cartela: Number(num("lb-points")),
-    reward_tiers: lbTiers.length ? lbTiers.map((t) => ({ from: t.from, to: Number(t.to), amount: Number(t.amount) })) : null,
     wagering_multiplier: Number(num("lb-wager")), channel_enabled: document.getElementById("lb-channel-on").checked,
     channel_username: num("lb-channel"), channel_points: Number(num("lb-channel-points")),
   };
@@ -2200,7 +2199,6 @@ function lbResetForm() {
   document.getElementById("lb-id").value = "";
   document.getElementById("lb-tz").value = "Africa/Addis_Ababa";
   document.getElementById("lb-budget").value = "100000"; document.getElementById("lb-winners").value = "250";
-  lbTiers = LB_DEFAULT_TIERS.map((t) => ({ ...t })); lbTiersLocked = false; lbRenderTiers();
   document.getElementById("lb-points").value = "10"; document.getElementById("lb-wager").value = "37"; document.getElementById("lb-channel-points").value = "50";
   document.getElementById("lb-form-title").textContent = "New campaign";
   document.getElementById("lb-save").textContent = "Create campaign";
@@ -2219,8 +2217,6 @@ function lbEdit(id) {
   document.getElementById("lb-channel-on").checked = !!c.channel_enabled; document.getElementById("lb-channel").value = c.channel_username ? `@${c.channel_username}` : "";
   document.getElementById("lb-channel-points").value = c.channel_points;
   const running = c.phase === "active";   // once points are being earned, only name / end / channel reward can change
-  lbTiers = (c.reward_tiers || []).map((t) => ({ ...t })); lbTiersLocked = running; lbRenderTiers();
-  if (!lbTiers.length) document.getElementById("lb-winners").value = c.winners_count;
   ["lb-budget", "lb-winners", "lb-points", "lb-wager", "lb-start"].forEach((f) => { document.getElementById(f).disabled = running; });
   document.getElementById("lb-form-title").textContent = running ? "Edit running campaign" : "Edit campaign";
   document.getElementById("lb-save").textContent = "Save changes";
@@ -2234,7 +2230,6 @@ document.getElementById("lb-form")?.addEventListener("submit", async (e) => {
   const id = document.getElementById("lb-id").value;
   const body = lbFormValues();
   if (id) { ["budget_etb", "winners_count", "points_per_cartela", "wagering_multiplier", "starts_at"].forEach((k) => { if (document.getElementById({ budget_etb: "lb-budget", winners_count: "lb-winners", points_per_cartela: "lb-points", wagering_multiplier: "lb-wager", starts_at: "lb-start" }[k]).disabled) delete body[k]; }); }
-  if (id && lbTiersLocked) delete body.reward_tiers;
   try {
     await api(id ? `/api/admin/leaderboard/campaigns/${id}` : "/api/admin/leaderboard/campaigns", { method: id ? "PUT" : "POST", body: JSON.stringify(body) });
     toast(id ? "Campaign updated" : "Campaign created", "success");
@@ -2256,7 +2251,7 @@ async function lbOpenDetail(id) {
     let decision = "";
     if (c.phase === "ended") {
       decision = `<div class="work-panel"><h4>Reward distribution</h4>
-        <p class="muted small">${c.reward_tiers ? `If you approve, every winner is paid the amount of their rank band (${money(d.preview_total)} for the current standings, out of a ${money(c.budget_etb)} budget).` : `If you approve, the top ${c.winners_count} share ${money(c.budget_etb)} in proportion to their points (${money(d.preview_total)} for the current standings).`} Rewards go to the bonus balance (play-only). After ${c.wagering_multiplier}× wagering, the winnings made from bonus play become withdrawable. It is all winners or nobody: nothing is paid unless you approve.</p>
+        <p class="muted small">If you approve, the top ${c.winners_count} share ${money(c.budget_etb)} in proportion to their points (${money(d.preview_total)} for the current standings). Rewards go to bonus balance and unlock after ${c.wagering_multiplier}× wagering. Nothing is paid unless you approve.</p>
         <div class="rc-actions"><button class="btn" data-action="lb-extend" data-id="${c.id}">Extend end date</button><button class="btn btn-approve" data-action="lb-approve" data-id="${c.id}">Approve &amp; distribute</button><button class="btn btn-delete" data-action="lb-reject" data-id="${c.id}">Reject (pay nothing)</button></div></div>`;
     } else if (c.phase === "distributed") {
       decision = `<p class="muted small">Approved ${c.decided_at ? new Date(c.decided_at).toLocaleString() : ""} · ${money(c.total_distributed)} distributed.</p>`;
@@ -2266,8 +2261,8 @@ async function lbOpenDetail(id) {
     const money0 = (n) => money(n);
     box.innerHTML = `${decision}
       <h4>Standings (top ${d.standings.length})</h4>
-      ${rows(d.standings, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Cartelas", (r) => r.cartelas], ["Reserved", (r) => money(r.reserved_etb)], ["Channel", (r) => r.channel_points], ["Points", (r) => `<b>${r.points}</b>`]])}
-      ${d.rewards.length ? `<h4>Rewards</h4>${rows(d.rewards, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Reward", (r) => money0(r.amount)], ["Wagering", (r) => `${r.wagered}/${r.wager_required} (${r.percent}%)`], ["Won from bonus", (r) => money0(r.bonus_won)], ["Status", (r) => r.status === "released" ? `Unlocked · ${money0(r.released)} withdrawable` : "Wagering"]])}` : (d.preview.length ? `<h4>Reward preview</h4>${rows(d.preview, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Points", (r) => r.points], ["Reward", (r) => money0(r.amount)]])}` : "")}
+      ${rows(d.standings, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Cartela", (r) => r.cartela_points], ["Channel", (r) => r.channel_points], ["Total", (r) => `<b>${r.points}</b>`]])}
+      ${d.rewards.length ? `<h4>Rewards</h4>${rows(d.rewards, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Reward", (r) => money0(r.amount)], ["Wagered", (r) => `${r.wagered}/${r.wager_required}`], ["Status", (r) => escapeHtml(r.status)]])}` : (d.preview.length ? `<h4>Reward preview</h4>${rows(d.preview, [["#", (r) => r.rank], ["Player", (r) => escapeHtml(r.name || r.player_id)], ["Points", (r) => r.points], ["Reward", (r) => money0(r.amount)]])}` : "")}
       <h4>Channel reward claims</h4>
       ${rows(d.channel_claims, [["Player", (r) => escapeHtml(r.display_name || r.player_id)], ["Points", (r) => r.points], ["When", (r) => new Date(r.created_at).toLocaleString()], ["", (r) => r.revoked ? "Revoked" : `<button class="btn btn-delete" data-action="lb-revoke" data-id="${r.id}">Revoke</button>`]])}
       ${d.failed_attempts.length ? `<h4>Unsuccessful verifications</h4>${rows(d.failed_attempts, [["Player", (r) => escapeHtml(r.display_name || r.player_id)], ["Result", (r) => escapeHtml(r.result)], ["Detail", (r) => escapeHtml(r.detail || "")], ["When", (r) => new Date(r.created_at).toLocaleString()]])}` : ""}`;
@@ -2342,3 +2337,253 @@ async function refreshAttention() {
 }
 setInterval(() => { if (!document.hidden) refreshAttention(); }, 30000);
 setTimeout(refreshAttention, 4000);
+
+/* ===========================================================================
+   Global search (top bar): players, phone numbers and deposit / withdrawal records
+   =========================================================================== */
+function wireGlobalSearch() {
+  const input = document.getElementById("global-search");
+  const panel = document.getElementById("global-search-results");
+  if (!input || !panel || input._wired) return;
+  input._wired = true;
+  let timer = 0, seq = 0, last = null;
+
+  const close = () => panel.classList.add("hidden");
+  const reveal = (tab) => { loadedTabs.add(tab); setActiveTab(tab); closeMoreSheet(); close(); };
+  const banner = (q, reload) => {
+    const el = document.createElement("div");
+    el.className = "recon-banner recon-review gs-banner";
+    el.innerHTML = `<span>Showing the search result for “${escapeHtml(q)}”.</span> <button type="button" class="secondary-btn gs-showall">Show all</button>`;
+    el.querySelector("button").addEventListener("click", () => reload().catch((e) => toast(e.message, "error")));
+    return el;
+  };
+
+  const open = {
+    player(p, q) {
+      reveal("users");
+      const box = document.getElementById("users-search");
+      const term = p.display_name || p.telegram_id || q;
+      if (box) box.value = term;
+      loadUsers(term);
+    },
+    deposit(d, q) {
+      reveal("deposits");
+      const list = document.getElementById("deposits-list");
+      list.innerHTML = renderDepositCard(d);
+      list.prepend(banner(q, () => loadDeposits()));
+      list.querySelector(".record-card")?.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+    withdrawal(w, q) {
+      reveal("withdrawals");
+      const list = document.getElementById("withdrawals-list");
+      list.innerHTML = renderWithdrawalCard(w);
+      list.prepend(banner(q, () => loadWithdrawals()));
+      list.querySelector(".record-card")?.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+  };
+
+  const row = (icon, title, sub, onPick) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "gs-item"; b.setAttribute("role", "option");
+    b.innerHTML = `<span class="gs-icon" aria-hidden="true">${icon}</span><span class="gs-text"><strong>${title}</strong><small>${sub}</small></span>`;
+    b.addEventListener("click", onPick);
+    return b;
+  };
+  const group = (label) => { const h = document.createElement("div"); h.className = "gs-group"; h.textContent = label; return h; };
+
+  function render(data) {
+    last = data;
+    const q = data.query;
+    panel.replaceChildren();
+    const status = (s) => ({ approved: "✅", rejected: "❌", pending: "⏳" }[s] || "");
+    if (data.players.length) {
+      panel.append(group("Players"));
+      data.players.forEach((p) => panel.append(row("👤",
+        `${escapeHtml(p.display_name || "Player")}${p.is_banned ? " · banned" : ""}`,
+        [p.phone_number, p.telegram_id && `TG ${p.telegram_id}`, `${money(p.balance)} + ${money(p.bonus_balance)} bonus`].filter(Boolean).map(escapeHtml).join(" · "),
+        () => open.player(p, q))));
+    }
+    if (data.deposits.length) {
+      panel.append(group("Deposits"));
+      data.deposits.forEach((d) => panel.append(row("↓",
+        `${status(d.status)} ${money(d.amount)} · ${escapeHtml(d.player_name)}`,
+        `${escapeHtml(d.payment_method || "")} · ${new Date(d.created_at).toLocaleString()} · ${escapeHtml(String(d.id).slice(0, 8))}`,
+        () => open.deposit(d, q))));
+    }
+    if (data.withdrawals.length) {
+      panel.append(group("Withdrawals"));
+      data.withdrawals.forEach((w) => panel.append(row("↑",
+        `${status(w.status)} ${money(w.amount)} · ${escapeHtml(w.legal_name || w.player_name)}`,
+        `${escapeHtml(w.payment_method || "")} → ${escapeHtml(w.withdrawal_address || "")} · ${new Date(w.created_at).toLocaleString()}`,
+        () => open.withdrawal(w, q))));
+    }
+    if (!panel.children.length) {
+      const none = document.createElement("div");
+      none.className = "gs-empty"; none.textContent = `Nothing found for “${q}”.`;
+      panel.append(none);
+    }
+    panel.classList.remove("hidden");
+  }
+
+  async function run() {
+    const q = input.value.trim();
+    if (q.length < 2) { close(); return; }
+    const mine = ++seq;
+    try {
+      const data = await api(`/api/admin/search?q=${encodeURIComponent(q)}`);
+      if (mine === seq) render(data);   // ignore answers to older keystrokes
+    } catch (e) {
+      if (mine === seq) { panel.replaceChildren(Object.assign(document.createElement("div"), { className: "gs-empty", textContent: e.message || "Search failed" })); panel.classList.remove("hidden"); }
+    }
+  }
+
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(run, 300); });
+  input.addEventListener("focus", () => { if (last && input.value.trim().length >= 2) panel.classList.remove("hidden"); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { close(); input.blur(); }
+    if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); const first = panel.querySelector(".gs-item"); if (first && !panel.classList.contains("hidden")) first.click(); else run(); }
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest(".global-search")) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") && !document.activeElement?.isContentEditable) {
+      e.preventDefault(); input.focus(); input.select();
+    }
+  });
+}
+
+/* ===========================================================================
+   Bonuses & cashback (super admin): campaign switches, amounts, budgets, meters, cashback player rules
+   =========================================================================== */
+const BONUS_META = {
+  cashback: { icon: "💸", name: "Daily cashback", pct: true, note: "A player who deposits and does not withdraw that day gets this percentage of the day's deposits back as bonus credit." },
+  first_deposit: { icon: "🎁", name: "First deposit bonus", pct: true, note: "Percentage of a player's first approved deposit." },
+  welcome: { icon: "👋", name: "Welcome bonus", note: "One-time credit when a player claims it." },
+  daily: { icon: "📅", name: "Daily reward", note: "Credit a player can claim once a day." },
+  referral: { icon: "🤝", name: "Referral reward", note: "Paid to the inviter when a friend finishes sign-up." },
+};
+const BONUS_ORDER = ["cashback", "first_deposit", "welcome", "daily", "referral"];
+
+function bonusMeter(label, used, budget) {
+  const pct = budget > 0 ? Math.min(100, Math.round((used * 100) / budget)) : 0;
+  const cls = budget > 0 && used >= budget ? "full" : pct >= 80 ? "warn" : "ok";
+  return `<div class="bm"><div class="bm-top"><span>${label}</span><strong>${money(used)} / ${money(budget)}</strong></div>
+    <div class="bm-bar ${cls}"><i style="width:${pct}%"></i></div>${cls === "warn" ? '<small class="bm-flag">Over 80% used</small>' : cls === "full" ? '<small class="bm-flag">Budget used up: new rewards are paused</small>' : ""}</div>`;
+}
+
+function bonusCard(c) {
+  const m = BONUS_META[c.reward_type] || { icon: "★", name: c.reward_type, note: "" };
+  const unit = m.pct ? "%" : " ETB";
+  const field = (key, label, value, help) => `<label class="bf"><span>${label}</span><input type="number" min="0" step="1" inputmode="numeric" data-field="${key}" data-orig="${value}" value="${value}">${help ? `<small>${help}</small>` : ""}</label>`;
+  return `<article class="bonus-card" data-reward="${c.reward_type}">
+    <header><div><h3>${m.icon} ${escapeHtml(m.name)}</h3><p class="muted small">${escapeHtml(m.note)}</p></div>
+      <button type="button" class="bc-toggle ${c.enabled ? "on" : "off"}" data-act="toggle" aria-pressed="${c.enabled}">${c.enabled ? "On" : "Off"}</button></header>
+    ${bonusMeter("Given today", c.today_etb, c.daily_budget_etb)}
+    ${bonusMeter("Given in total", c.total_etb, c.total_budget_etb)}
+    <p class="muted small">${c.today_count} reward${c.today_count === 1 ? "" : "s"} paid today</p>
+    <div class="bf-grid">
+      ${field("amount_etb", m.pct ? "Percentage" : "ETB per reward", c.amount_etb, m.pct ? "1 to 100" : "")}
+      ${field("daily_budget_etb", "Daily budget (ETB)", c.daily_budget_etb)}
+      ${field("total_budget_etb", "Total budget (ETB)", c.total_budget_etb)}
+      ${c.reward_type === "cashback" ? field("per_player_daily_max_etb", "Max cashback per player per day (ETB)", c.per_player_daily_max_etb || 0, "0 means no limit") : field("per_player_cap", c.reward_type === "referral" ? "Max rewards per player" : "Rewards per player", c.per_player_cap)}
+    </div>
+    <div class="bf-save"><input type="text" data-field="reason" maxlength="200" placeholder="Reason for the change (at least 8 characters)"><button type="button" class="primary-btn" data-act="save">Save changes</button></div>
+  </article>`;
+}
+
+async function loadBonuses() {
+  const root = document.getElementById("bonuses-root");
+  if (!root) return;
+  const [data, rules] = await Promise.all([api("/api/admin/bonus/campaigns"), api("/api/admin/bonus/cashback/players")]);
+  const byType = Object.fromEntries(data.campaigns.map((c) => [c.reward_type, c]));
+  const cards = BONUS_ORDER.filter((k) => byType[k]).map((k) => bonusCard(byType[k]));
+  const rulesHtml = rules.rules.length ? rules.rules.map((r) => `<li class="cr-row" data-player="${escapeHtml(r.player_id)}">
+      <span><strong>${escapeHtml(r.display_name || r.player_id)}</strong>${r.phone_number ? ` · ${escapeHtml(r.phone_number)}` : ""}<small>${r.excluded ? "No cashback" : `Max ${money(r.daily_cap_etb)} per day`} · ${escapeHtml(r.reason || "")}</small></span>
+      <button type="button" class="secondary-btn" data-act="rule-remove">Remove</button></li>`).join("") : '<li class="muted small">No player rules yet.</li>';
+  root.innerHTML = `
+    <article class="bonus-card bonus-global"><header><div><h3>All bonuses</h3><p class="muted small">One switch for every reward below, including cashback.</p></div>
+      <button type="button" class="bc-toggle ${data.globally_enabled ? "on" : "off"}" data-act="global" aria-pressed="${data.globally_enabled}">${data.globally_enabled ? "On" : "Paused"}</button></header>
+      <div class="bf-save"><input type="text" data-field="reason" maxlength="200" placeholder="Reason (needed to change this switch)"></div></article>
+    ${cards[0] || ""}
+    <article class="bonus-card" id="cashback-rules"><header><div><h3>💸 Cashback player rules</h3><p class="muted small">Keep a player out of cashback, or give them their own daily limit.</p></div></header>
+      <div class="bf-save"><input type="search" id="cr-search" placeholder="Find a player: name, phone or Telegram ID" autocomplete="off"></div>
+      <div id="cr-results" class="cr-results"></div>
+      <div id="cr-form" class="cr-form hidden"></div>
+      <h4 class="small">Current rules</h4><ul class="cr-list">${rulesHtml}</ul></article>
+    ${cards.slice(1).join("")}`;
+  wireBonuses(root);
+}
+
+function wireBonuses(root) {
+  if (root._wired) return;
+  root._wired = true;
+  const reasonOf = (scope) => {
+    const v = (scope.querySelector('[data-field="reason"]')?.value || "").trim();
+    if (v.length < 8) { toast("Please write a reason of at least 8 characters.", "error"); scope.querySelector('[data-field="reason"]')?.focus(); return null; }
+    return v;
+  };
+  const done = (msg) => { toast(msg, "success"); loadBonuses().catch((e) => toast(e.message, "error")); };
+
+  root.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const card = btn.closest(".bonus-card");
+    const act = btn.dataset.act;
+    try {
+      if (act === "global") {
+        const reason = reasonOf(card); if (!reason) return;
+        await api("/api/admin/bonus/global", { method: "PUT", body: JSON.stringify({ enabled: btn.getAttribute("aria-pressed") !== "true", reason }) });
+        done("Saved");
+      } else if (act === "toggle") {
+        const reason = reasonOf(card); if (!reason) return;
+        await api(`/api/admin/bonus/campaigns/${card.dataset.reward}`, { method: "PUT", body: JSON.stringify({ enabled: btn.getAttribute("aria-pressed") !== "true", reason }) });
+        done("Saved");
+      } else if (act === "save") {
+        const reason = reasonOf(card); if (!reason) return;
+        const body = { reason };
+        card.querySelectorAll("input[data-orig]").forEach((i) => { if (i.value !== i.dataset.orig) body[i.dataset.field] = Number(i.value); });
+        if (Object.keys(body).length === 1) { toast("Nothing changed.", "info"); return; }
+        await api(`/api/admin/bonus/campaigns/${card.dataset.reward}`, { method: "PUT", body: JSON.stringify(body) });
+        done("Saved");
+      } else if (act === "rule-remove") {
+        const reason = (window.prompt("Reason for removing this rule (at least 8 characters):") || "").trim();
+        if (reason.length < 8) { toast("A reason of at least 8 characters is required.", "error"); return; }
+        await api(`/api/admin/bonus/cashback/players/${encodeURIComponent(btn.closest(".cr-row").dataset.player)}`, { method: "PUT", body: JSON.stringify({ excluded: false, daily_cap_etb: null, reason }) });
+        done("Rule removed");
+      } else if (act === "rule-pick") {
+        const form = document.getElementById("cr-form");
+        form.dataset.player = btn.dataset.player;
+        form.innerHTML = `<p><strong>${escapeHtml(btn.dataset.name)}</strong></p>
+          <label class="bf-check"><input type="checkbox" id="cr-excluded"> No cashback for this player</label>
+          <label class="bf"><span>Or their own max cashback per day (ETB)</span><input type="number" min="1" step="1" inputmode="numeric" id="cr-cap" placeholder="empty = campaign default"></label>
+          <div class="bf-save"><input type="text" data-field="reason" maxlength="200" placeholder="Reason (at least 8 characters)"><button type="button" class="primary-btn" data-act="rule-save">Save rule</button></div>`;
+        form.classList.remove("hidden");
+        document.getElementById("cr-results").replaceChildren();
+      } else if (act === "rule-save") {
+        const form = document.getElementById("cr-form");
+        const reason = reasonOf(form); if (!reason) return;
+        const capRaw = document.getElementById("cr-cap").value.trim();
+        await api(`/api/admin/bonus/cashback/players/${encodeURIComponent(form.dataset.player)}`, { method: "PUT", body: JSON.stringify({ excluded: document.getElementById("cr-excluded").checked, daily_cap_etb: capRaw ? Number(capRaw) : null, reason }) });
+        done("Rule saved");
+      }
+    } catch (err) { toast(err.message || "Could not save", "error"); }
+  });
+
+  let timer = 0, seq = 0;
+  root.addEventListener("input", (e) => {
+    if (e.target.id !== "cr-search") return;
+    clearTimeout(timer);
+    const q = e.target.value.trim();
+    const out = document.getElementById("cr-results");
+    if (q.length < 2) { out.replaceChildren(); return; }
+    timer = setTimeout(async () => {
+      const mine = ++seq;
+      try {
+        const data = await api(`/api/admin/search?q=${encodeURIComponent(q)}`);
+        if (mine !== seq) return;
+        out.innerHTML = data.players.length ? data.players.map((p) => `<button type="button" class="gs-item" data-act="rule-pick" data-player="${escapeHtml(p.id)}" data-name="${escapeHtml(p.display_name || p.id)}">
+            <span class="gs-icon">👤</span><span class="gs-text"><strong>${escapeHtml(p.display_name || "Player")}</strong><small>${[p.phone_number, p.telegram_id && `TG ${p.telegram_id}`].filter(Boolean).map(escapeHtml).join(" · ")}</small></span></button>`).join("")
+          : '<p class="muted small">No players found.</p>';
+      } catch (err) { /* ignore: search box shows nothing */ }
+    }, 300);
+  });
+}

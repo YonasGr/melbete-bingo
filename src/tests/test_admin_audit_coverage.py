@@ -37,3 +37,10 @@ def test_money_decisions_and_exports_are_audited():
         assert "_audit(" in sources[name], name
     text = ADMIN_ROUTER.read_text()
     assert 'f"export.{kind}s"' in text   # CSV exports record who pulled player and payout data
+
+
+def test_lobby_controls_are_audited_and_super_admin_only():
+    sources = dict(_mutating_routes())
+    for name in ("admin_reset_lobby", "admin_force_start_game"):
+        assert "_audit(" in sources[name], name
+        assert "require_super_admin_dep" in sources[name], name
