@@ -152,7 +152,7 @@ async def test_refresh_tier_promotes_and_never_lowers_base_rate():
     repo.volume = 250_000
     agent = await svc.refresh_tier(agent)   # a real promotion notifies the agent
     assert (agent.tier_label, agent.tier_bps) == ("Gold", 500)
-    assert max(agent.commission_bps, agent.tier_bps) == 400
+    assert max(agent.commission_bps, agent.tier_bps) == 500
     repo.agent.commission_bps = 900  # admin gave this agent a better personal rate
     assert max(repo.agent.commission_bps, repo.agent.tier_bps) == 900
 

@@ -54,7 +54,9 @@ async def run_idempotent(
         raise HTTPException(status_code=400, detail="Invalid Idempotency-Key (8-128 chars: letters, digits, _ - : .)")
 
     attempt_id = (player_id, scope, key)
-    _active_attempts[attempt_id] = _active_attempts.get(attempt_id, 0) + 1
+    if _active_attempts.get(attempt_id):
+        raise HTTPException(status_code=409, detail="This request is already being processed. Please wait a moment.")
+    _active_attempts[attempt_id] = 1
     repo = repo or IdempotencyRepository()
     try:
         fingerprint = request_fingerprint(payload)
@@ -63,8 +65,6 @@ async def run_idempotent(
             if existing["request_hash"] != fingerprint:
                 raise HTTPException(status_code=422, detail="Idempotency-Key was already used with a different request.")
             if existing["status"] == "completed" and existing["response"] is not None:
-                if _active_attempts[attempt_id] > 1:
-                    raise HTTPException(status_code=409, detail="This request is already being processed. Please wait a moment.")
                 return existing["response"]
             raise HTTPException(status_code=409, detail="This request is already being processed. Please wait a moment.")
 
@@ -87,8 +87,4 @@ async def run_idempotent(
             logger.exception("Could not store idempotent response for %s/%s", scope, key)
         return response
     finally:
-        remaining = _active_attempts.get(attempt_id, 1) - 1
-        if remaining:
-            _active_attempts[attempt_id] = remaining
-        else:
-            _active_attempts.pop(attempt_id, None)
+        _active_attempts.pop(attempt_id, None)

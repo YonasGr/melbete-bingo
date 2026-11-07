@@ -412,7 +412,7 @@ class RoomService:
             # Keep a short lobby from starting on a single player's first
             # two reservations; the configured start threshold still governs
             # charge_and_start(), but the visible countdown needs three cards.
-            configured_min = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+            configured_min = max(int(getattr(room, "min_cartelas_to_start", 3) or 1), 1)
             min_cartelas = 1 if configured_min == 1 else max(configured_min, 3)
             if len(taken) >= min_cartelas and not room.countdown_started_at:
                 # The lobby has enough cartelas (they may all belong to one
@@ -448,7 +448,7 @@ class RoomService:
             if card.cartela_number in room.taken_cartelas:
                 room.taken_cartelas.remove(card.cartela_number)
         fields = {"taken_cartelas": room.taken_cartelas}
-        configured_min = max(int(getattr(room, "min_cartelas_to_start", 2) or 1), 1)
+        configured_min = max(int(getattr(room, "min_cartelas_to_start", 3) or 1), 1)
         min_cartelas = 1 if configured_min == 1 else max(configured_min, 3)
         if len(room.taken_cartelas) < min_cartelas:
             # Not enough cartelas any more - stop the clock; it restarts
@@ -839,7 +839,7 @@ class RoomService:
         """
         cards = await self.cards.list_by_room(room_id)
         return (
-            int(getattr(await self.get_room(room_id), "min_cartelas_to_start", 2) or 2) == 1
+            int(getattr(await self.get_room(room_id), "min_cartelas_to_start", 3) or 3) == 1
             or len({card.owner_id for card in cards}) > 10
         )
 
