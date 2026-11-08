@@ -1368,6 +1368,13 @@ document.getElementById("reward-settings-form")?.addEventListener("submit", asyn
 /* ===========================================================================
    Settings
    =========================================================================== */
+// The 50 ETB and Bonus room fields are no longer in the page; skip any control that is missing
+// so Settings still loads and saves instead of throwing on a null element.
+function setValue(id, v) { const el = document.getElementById(id); if (el) el.value = v; }
+function setChecked(id, v) { const el = document.getElementById(id); if (el) el.checked = v; }
+function optNum(id) { const el = document.getElementById(id); return el ? Number(el.value) : undefined; }
+function optBool(id) { const el = document.getElementById(id); return el ? el.checked : undefined; }
+
 async function loadSettings() {
   try {
     const s = await api("/api/admin/settings");
@@ -1390,13 +1397,13 @@ async function loadSettings() {
     document.getElementById("s-support-contact").value = s.support_contact || "@melbete_support_1";
     document.getElementById("s-deposits-enabled").checked = s.deposits_enabled !== false;
     document.getElementById("s-bot-enabled-real-10").checked = !!s.bot_enabled_real_10;
-    document.getElementById("s-bot-enabled-real-50").checked = !!s.bot_enabled_real_50;
-    document.getElementById("s-bot-enabled-bonus").checked = !!s.bot_enabled_bonus;
+    setChecked("s-bot-enabled-real-50", !!s.bot_enabled_real_50);
+    setChecked("s-bot-enabled-bonus", !!s.bot_enabled_bonus);
     document.getElementById("s-max-bots-real-10").value = s.max_bots_real_10 || 10;
-    document.getElementById("s-max-bots-real-50").value = s.max_bots_real_50 || 10;
-    document.getElementById("s-max-bots-bonus").value = s.max_bots_bonus || 10;
-    document.getElementById("s-stake-real-50").value = s.stake_amount_real_50 || 50;
-    document.getElementById("s-stake-bonus").value = s.stake_amount_bonus || 10;
+    setValue("s-max-bots-real-50", s.max_bots_real_50 || 10);
+    setValue("s-max-bots-bonus", s.max_bots_bonus || 10);
+    setValue("s-stake-real-50", s.stake_amount_real_50 || 50);
+    setValue("s-stake-bonus", s.stake_amount_bonus || 10);
   } catch (err) {
     toast("Failed to load System Settings", "error");
   }
@@ -1450,8 +1457,8 @@ document.getElementById("settings-form")?.addEventListener("submit", async (e) =
       body: JSON.stringify({
         stake_amount: Number(document.getElementById("s-stake").value),
         stake_amount_real_10: Number(document.getElementById("s-stake").value),
-        stake_amount_real_50: Number(document.getElementById("s-stake-real-50").value),
-        stake_amount_bonus: Number(document.getElementById("s-stake-bonus").value),
+        stake_amount_real_50: optNum("s-stake-real-50"),
+        stake_amount_bonus: optNum("s-stake-bonus"),
         free_credit_amount: Number(document.getElementById("s-bonus").value),
         referral_bonus: Number(document.getElementById("s-referral-bonus").value),
         max_referrals_per_user: Number(document.getElementById("s-referral-cap").value),
@@ -1470,11 +1477,11 @@ document.getElementById("settings-form")?.addEventListener("submit", async (e) =
         support_contact: document.getElementById("s-support-contact").value.trim(),
         deposits_enabled: document.getElementById("s-deposits-enabled").checked,
         bot_enabled_real_10: document.getElementById("s-bot-enabled-real-10").checked,
-        bot_enabled_real_50: document.getElementById("s-bot-enabled-real-50").checked,
-        bot_enabled_bonus: document.getElementById("s-bot-enabled-bonus").checked,
+        bot_enabled_real_50: optBool("s-bot-enabled-real-50"),
+        bot_enabled_bonus: optBool("s-bot-enabled-bonus"),
         max_bots_real_10: Number(document.getElementById("s-max-bots-real-10").value),
-        max_bots_real_50: Number(document.getElementById("s-max-bots-real-50").value),
-        max_bots_bonus: Number(document.getElementById("s-max-bots-bonus").value),
+        max_bots_real_50: optNum("s-max-bots-real-50"),
+        max_bots_bonus: optNum("s-max-bots-bonus"),
       }),
     });
     toast(`Settings saved. ${lobbySyncMessage(saved?.lobby_sync)}`.trim(), "success");

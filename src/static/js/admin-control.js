@@ -354,6 +354,8 @@
   }
 
   /* ---------------- staff ---------------- */
+  // Placeholder shown while loadStaff() fetches; renderSection() looks this function up for every section.
+  function staffHtml() { return `<p class="cc-note">Loading staff…</p>`; }
   async function loadStaff() {
     const body = $("cc-body");
     const [{ admins }, roles] = await Promise.all([api("/api/admin/admins"), api("/api/admin/roles")]);
