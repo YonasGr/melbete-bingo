@@ -639,6 +639,7 @@ PERMISSIONS = {
     "control.emergency": "Use maintenance mode and the kill switch instantly",
     "experience.edit": "Edit game-experience settings (celebrations, countdown, voice, timings)",
     "rewards.manage": "Start, stop and schedule rewards; reward blocks and manual grants",
+    "games.manage": "End running rounds, start or reset waiting lobbies, delete waiting rooms",
     "staff.manage": "Add or remove staff and change roles",
     "audit.view": "View the audit log",
 }
@@ -653,7 +654,7 @@ ROLE_LABELS = {
 
 ROLE_PRESETS: dict[str, frozenset] = {
     "super": frozenset(PERMISSIONS),
-    "manager": frozenset({"control.edit", "control.publish", "control.emergency", "experience.edit", "rewards.manage", "players.view", "audit.view"}),
+    "manager": frozenset({"control.edit", "control.publish", "control.emergency", "experience.edit", "rewards.manage", "games.manage", "players.view", "audit.view"}),
     "finance": frozenset({"money.approve", "money.approve_large", "players.view", "audit.view"}),
     "support": frozenset({"players.view", "players.ban", "players.notes"}),
     # Existing admins keep what they could do before: money approvals + read access, plus drafting.

@@ -1,3 +1,7 @@
+## Admin: "Manage running games" permission
+- New permission `games.manage` (terminate running rounds, Start now, Reset lobby, delete waiting rooms). Managers have it by default; any other role can be given it per person under Extra permissions. Super admins always have it. Replaces the old super-admin-only rule on those four actions.
+- Control Center: added missing `staffHtml` renderer (blank Control Center fix). Settings tab no longer breaks on the removed 50 ETB / Bonus room fields.
+
 # Round A - first impressions and the money flow
 
 - Cosmic splash (starfield, orbiting rings, tagline) behind the existing loading view.

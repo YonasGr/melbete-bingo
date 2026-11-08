@@ -65,7 +65,11 @@ async def admin_login(
         await _audit(request, telegram_id or "unknown", "admin.login_failed", target_type="admin", target_id=telegram_id or "unknown",
                      summary="Known admin, wrong code" if known else "Not an admin or no Telegram identity")
         raise HTTPException(status_code=403, detail="Telegram verification and a valid authenticator code are required")
-    response = JSONResponse({"is_admin": True, "is_super_admin": await admin_service.is_super_admin(telegram_id)})
+    response = JSONResponse({
+        "is_admin": True,
+        "is_super_admin": await admin_service.is_super_admin(telegram_id),
+        "permissions": sorted(await admin_service.permissions_of(telegram_id)),
+    })
     response.set_cookie(
         "admin_session", create_admin_session(telegram_id), max_age=ADMIN_SESSION_TTL_SECONDS,
         httponly=True, secure=True, samesite="strict", path="/api/admin",
@@ -869,7 +873,7 @@ async def admin_terminate_game(
     room_id: str,
     request: Request,
     payload: dict = Body(default={}),
-    requester: str = Depends(require_super_admin_dep),
+    requester: str = Depends(require_perm("games.manage")),
 ):
     reason = (payload or {}).get("reason") or "Terminated by admin"
     full_reason = f"admin_terminated: {reason} (by {requester})"
@@ -909,7 +913,7 @@ async def admin_reset_lobby(
     room_id: str,
     request: Request,
     payload: dict = Body(default={}),
-    requester: str = Depends(require_super_admin_dep),
+    requester: str = Depends(require_perm("games.manage")),
 ):
     """Un-stick a waiting lobby: drop every cartela reservation and stop the countdown.
 
@@ -948,7 +952,7 @@ async def admin_force_start_game(
     room_id: str,
     request: Request,
     payload: dict = Body(default={}),
-    requester: str = Depends(require_super_admin_dep),
+    requester: str = Depends(require_perm("games.manage")),
 ):
     """Start a waiting lobby now instead of waiting for its countdown.
 
@@ -997,7 +1001,7 @@ async def admin_force_start_game(
 async def admin_delete_game(
     room_id: str,
     request: Request,
-    requester: str = Depends(require_super_admin_dep),
+    requester: str = Depends(require_perm("games.manage")),
 ):
     try:
         room = await get_room_service().get_room(room_id)

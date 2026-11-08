@@ -12,6 +12,7 @@ tg?.expand();
 
 const state = {
   isSuperAdmin: false,
+  perms: new Set(),
   inTelegram: !!tg?.initData,
   currentDepositFilter: "pending",
   currentWithdrawalFilter: "pending",
@@ -128,6 +129,9 @@ function tgCopyChip(tgId) {
 /* ===========================================================================
    Login
    =========================================================================== */
+// Terminate / start now / reset lobby / delete room: super admins, or any role holding "games.manage".
+const canManageGames = () => state.isSuperAdmin || state.perms.has("games.manage");
+
 async function login(totpCode) {
   if (!state.inTelegram || !tg?.initData) throw new Error("The admin panel can only be opened from Telegram.");
   const me = await api("/api/admin/login", {
@@ -136,6 +140,7 @@ async function login(totpCode) {
     body: JSON.stringify({ totp_code: totpCode }),
   });
   state.isSuperAdmin = me.is_super_admin;
+  state.perms = new Set(me.permissions || []);
   document.getElementById("login-screen").classList.add("hidden");
   document.getElementById("admin-shell").classList.remove("hidden");
 
@@ -563,7 +568,7 @@ function renderLiveGameBanner(report) {
         <div class="lg-title"><span class="pill ${report.room_state}">${report.room_state}</span> Live session</div>
         <div class="lg-meta">${report.players_in_round} cartela(s) in play · ${report.called_numbers} number(s) drawn · Pool: ${money(report.prize_pool)}</div>
       </div>
-      ${isLive && state.isSuperAdmin ? `<button class="btn-terminate" id="terminate-live-btn">⛔ Terminate round</button>` : ""}
+      ${isLive && canManageGames() ? `<button class="btn-terminate" id="terminate-live-btn">⛔ Terminate round</button>` : ""}
     </div>
   `;
   document.getElementById("terminate-live-btn")?.addEventListener("click", (e) => terminateGame(report.room_id, e.currentTarget));
@@ -676,9 +681,9 @@ async function loadGames(filter = state.currentGameFilter) {
         `<div class="winner-line">🏆 <strong>${escapeHtml(w.player_name)}</strong> — Cartela #${w.cartela_number} — ${money(w.payout)}</div>`
       ).join("");
       let actionsHtml = "";
-      if (g.state === "running" && !g.terminated && state.isSuperAdmin) {
+      if (g.state === "running" && !g.terminated && canManageGames()) {
         actionsHtml = `<div class="rc-actions"><button class="btn-terminate" data-action="terminate-game" data-id="${g.id}">⛔ Terminate round</button></div>`;
-      } else if (g.state === "waiting" && state.isSuperAdmin) {
+      } else if (g.state === "waiting" && canManageGames()) {
         actionsHtml = `<div class="rc-actions">` +
           `<button class="btn-terminate" data-action="force-start-game" data-id="${g.id}">▶️ Start now</button>` +
           `<button class="btn-terminate" data-action="reset-lobby" data-id="${g.id}">🔄 Reset lobby</button>` +

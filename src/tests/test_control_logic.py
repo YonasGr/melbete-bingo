@@ -107,6 +107,9 @@ def test_role_permissions():
     assert "players.ban" in cl.permissions_for("support")
     assert "money.approve" not in cl.permissions_for("support")
     assert "control.publish" in cl.permissions_for("manager")
+    assert "games.manage" in cl.permissions_for("manager")
+    assert "games.manage" not in cl.permissions_for("support")
+    assert "games.manage" in cl.permissions_for("super")
     # legacy admins keep what they had: approvals + view, plus drafting - but cannot publish or ban
     legacy = cl.permissions_for("admin")
     assert {"money.approve", "players.view", "control.edit"} <= legacy
