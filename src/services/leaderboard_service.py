@@ -277,6 +277,10 @@ class LeaderboardService:
         c = await self._get(campaign_id)
         now = utcnow()
         phase = campaign_phase(c, now)
+        from src.services.control_service import reward_blocked
+        held = await reward_blocked("leaderboard_prizes", payout=(phase == "distributed"))
+        if held:
+            raise LeaderboardError(held)
         if phase == "distributed":
             return await self._finish_credits(c, admin_id)      # safe re-run: pays only rows not yet credited
         if phase != "ended":

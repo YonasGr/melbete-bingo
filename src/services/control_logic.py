@@ -13,7 +13,7 @@ reused by the API layer, the wallet/room services and the public config endpoint
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 # --------------------------------------------------------------------------
@@ -31,6 +31,32 @@ FLAGS = {
     "agent_portal": "Agent portal",
     "cashback": "Daily cashback",
 }
+
+# Every promotional reward the admin can start / stop on its own (Rewards tab).
+REWARDS = {
+    "welcome": "Welcome bonus",
+    "daily": "Daily bonus",
+    "first_deposit": "First-deposit bonus",
+    "referral": "Referral bonus",
+    "cashback": "Daily cashback",
+    "agent_rewards": "Agent rewards",
+    "missions": "Daily missions",
+    "streak_winback": "Play streaks & win-back",
+    "leaderboard_prizes": "Leaderboard prizes",
+}
+EXPERIENCE_DEFAULTS = {
+    "tiers": {"big_win_etb": 500, "jackpot_etb": 2000, "jackpot_burst": True, "coin_fly": True},
+    "countdown": {"warn_seconds": 10, "hot_seconds": 5, "lobby_feed": True, "show_pool": True},
+    "splash": {"enabled": True, "seconds": 3},
+    "voice": {"mode": "player"},          # player = each player chooses (off by default) | off = forced off | on_by_default
+    "alerts": {"near_win": True, "haptics": True},
+    "verify": {"min_ms": 1100},           # "Checking your card..." minimum time; 0 = off
+    "random_picker": {"choices": 3},      # cartelas offered by the dice button; 0 = pick one instantly
+    "rematch": {"keep_cartelas": True},
+    "timing": {"next_round_seconds": 0, "lock_seconds": 0},   # 0 = server default (15s next round, 5s pick lock)
+}
+VOICE_MODES = ("player", "off", "on_by_default")
+REWARD_MODES = ("new", "all")   # "new" = stop new claims only; "all" = also hold payouts of rewards already earned
 
 _LANG_TEXTS = ("cashback_note", "agent_intro", "agent_link_hint", "agent_note_hint")
 TEXT_KEYS = ("deposit_intro", "withdraw_intro", "home_note") + tuple(f"{k}_{lang}" for k in _LANG_TEXTS for lang in ("en", "am"))
@@ -60,6 +86,13 @@ DEFAULT_CONFIG: dict = {
         "texts": {k: "" for k in TEXT_KEYS},
     },
     "promotions": [],   # timed cashback boosts, see normalize_promotions()
+    "rewards": {
+        "master": {"paused": False, "mode": "new", "reason": ""},
+        "items": {k: {"enabled": True, "mode": "new", "reason": "", "start_at": "", "stop_at": "", "auto_stop_pct": 0,
+                      "windows": [], "spike_limit": 0, "spike_minutes": 10,
+                      "elig": {"new_players_days": 0, "min_deposits_etb": 0}} for k in REWARDS},
+    },
+    "experience": EXPERIENCE_DEFAULTS,
     "alerts": {
         "enabled": True,
         "big_withdrawal_amount": 5000,      # ETB; a withdrawal request at or above this alerts admins (0 = never)
@@ -266,6 +299,181 @@ def normalize_promotions(raw: Any) -> list:
     return out
 
 
+def _hm(v: str) -> int:
+    return int(v[:2]) * 60 + int(v[3:5])
+
+
+def _windows(raw: Any, key: str) -> list:
+    """Up to 3 weekly windows (Ethiopia time): {days:[Mon..Sun bools], from:'HH:MM', to:'HH:MM'}; empty = always."""
+    import re
+    out = []
+    for w in (raw if isinstance(raw, list) else [])[:3]:
+        if not isinstance(w, dict):
+            continue
+        days = [bool(x) for x in (w.get("days") if isinstance(w.get("days"), list) else [True] * 7)][:7]
+        days += [False] * (7 - len(days))
+        f, t = str(w.get("from", "00:00")), str(w.get("to", "00:00"))
+        for x in (f, t):
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", x):
+                raise ValueError(f"{REWARDS[key]}: times must look like 18:00")
+        out.append({"days": days, "from": f, "to": t})
+    return out
+
+
+def _in_windows(windows: list, now: datetime) -> bool:
+    if not windows:
+        return True
+    et = now.astimezone(timezone(timedelta(hours=3)))
+    mins, today = et.hour * 60 + et.minute, et.weekday()
+    yday = (today - 1) % 7
+    for w in windows:
+        f, t = _hm(w["from"]), _hm(w["to"])
+        if f == t:
+            if w["days"][today]:
+                return True
+        elif f < t:
+            if w["days"][today] and f <= mins < t:
+                return True
+        elif (w["days"][today] and mins >= f) or (w["days"][yday] and mins < t):   # runs past midnight
+            return True
+    return False
+
+
+def normalize_experience(raw: Any) -> dict:
+    """Player-experience tuning (celebrations, countdown, splash, voice, alerts...). Everything has a safe default."""
+    raw = raw if isinstance(raw, dict) else {}
+    d = EXPERIENCE_DEFAULTS
+
+    def sec(n: str) -> dict:
+        v = raw.get(n)
+        return v if isinstance(v, dict) else {}
+
+    t, c, s, v, a, ve, rp, rm, tm = (sec(n) for n in ("tiers", "countdown", "splash", "voice", "alerts", "verify", "random_picker", "rematch", "timing"))
+    mode = v.get("mode", d["voice"]["mode"])
+    if mode not in VOICE_MODES:
+        raise ValueError(f"experience.voice.mode must be one of {', '.join(VOICE_MODES)}")
+
+    def i(sect: dict, grp: str, k: str, lo: int, hi: int) -> int:
+        return _int(sect.get(k, d[grp][k]), f"experience.{grp}.{k}", lo, hi)
+
+    def b(sect: dict, grp: str, k: str) -> bool:
+        return _bool(sect.get(k, d[grp][k]), f"experience.{grp}.{k}")
+
+    out = {
+        "tiers": {"big_win_etb": i(t, "tiers", "big_win_etb", 1, 10_000_000), "jackpot_etb": i(t, "tiers", "jackpot_etb", 1, 10_000_000),
+                  "jackpot_burst": b(t, "tiers", "jackpot_burst"), "coin_fly": b(t, "tiers", "coin_fly")},
+        "countdown": {"warn_seconds": i(c, "countdown", "warn_seconds", 0, 120), "hot_seconds": i(c, "countdown", "hot_seconds", 0, 60),
+                      "lobby_feed": b(c, "countdown", "lobby_feed"), "show_pool": b(c, "countdown", "show_pool")},
+        "splash": {"enabled": b(s, "splash", "enabled"), "seconds": i(s, "splash", "seconds", 1, 5)},
+        "voice": {"mode": mode},
+        "alerts": {"near_win": b(a, "alerts", "near_win"), "haptics": b(a, "alerts", "haptics")},
+        "verify": {"min_ms": i(ve, "verify", "min_ms", 0, 3000)},
+        "random_picker": {"choices": i(rp, "random_picker", "choices", 0, 5)},
+        "rematch": {"keep_cartelas": b(rm, "rematch", "keep_cartelas")},
+        "timing": {"next_round_seconds": i(tm, "timing", "next_round_seconds", 0, 300), "lock_seconds": i(tm, "timing", "lock_seconds", 0, 30)},
+    }
+    if out["tiers"]["jackpot_etb"] < out["tiers"]["big_win_etb"]:
+        raise ValueError("The jackpot amount must be at least the big-win amount")
+    if out["countdown"]["hot_seconds"] > out["countdown"]["warn_seconds"]:
+        raise ValueError("The red countdown seconds can't be more than the warning seconds")
+    return out
+
+
+def _rewards_public(config: dict, now: datetime) -> dict:
+    """What the Bonus Center may show: only rewards that are paused / scheduled / ending."""
+    out = {}
+    items = ((config or {}).get("rewards") or {}).get("items") or {}
+    for key, label in REWARDS.items():
+        st = reward_state(config, key, now)
+        it = items.get(key) or {}
+        if st["state"] != "on":
+            out[key] = {"label": label, "state": st["state"], "message": st["message"], "starts_at": it.get("start_at", "") if st["state"] == "scheduled" else ""}
+        elif it.get("stop_at"):
+            out[key] = {"label": label, "state": "on", "message": "", "ends_at": it["stop_at"]}
+    return out
+
+
+def _reward_item(raw: Any, key: str) -> dict:
+    r = raw if isinstance(raw, dict) else {}
+    el = r.get("elig") if isinstance(r.get("elig"), dict) else {}
+    mode = r.get("mode", "new")
+    if mode not in REWARD_MODES:
+        raise ValueError(f"rewards.{key}.mode must be one of {', '.join(REWARD_MODES)}")
+    item = {
+        "enabled": _bool(r.get("enabled", True), f"rewards.{key}.enabled"),
+        "mode": mode,
+        "reason": _text(r.get("reason", ""), f"rewards.{key}.reason", 200),
+        "start_at": _iso(r.get("start_at", ""), f"{REWARDS[key]} start time"),
+        "stop_at": _iso(r.get("stop_at", ""), f"{REWARDS[key]} stop time"),
+        "auto_stop_pct": _int(r.get("auto_stop_pct", 0), f"rewards.{key}.auto_stop_pct", 0, 100),
+        "windows": _windows(r.get("windows"), key),
+        "spike_limit": _int(r.get("spike_limit", 0), f"rewards.{key}.spike_limit", 0, 100000),
+        "spike_minutes": _int(r.get("spike_minutes", 10), f"rewards.{key}.spike_minutes", 1, 1440),
+        "elig": {
+            "new_players_days": _int(el.get("new_players_days", 0), f"rewards.{key}.new_players_days", 0, 3650),
+            "min_deposits_etb": _int(el.get("min_deposits_etb", 0), f"rewards.{key}.min_deposits_etb", 0, 10_000_000),
+        },
+    }
+    a, b = _parse_dt(item["start_at"]), _parse_dt(item["stop_at"])
+    if a and b and b <= a:
+        raise ValueError(f"{REWARDS[key]}: the stop time must be after the start time")
+    return item
+
+
+def normalize_rewards(raw: Any) -> dict:
+    raw = raw if isinstance(raw, dict) else {}
+    m = raw.get("master") if isinstance(raw.get("master"), dict) else {}
+    items = raw.get("items") if isinstance(raw.get("items"), dict) else {}
+    for k in items:
+        if k not in REWARDS:
+            raise ValueError(f"Unknown reward '{k}'")
+    mode = m.get("mode", "new")
+    if mode not in REWARD_MODES:
+        raise ValueError(f"rewards.master.mode must be one of {', '.join(REWARD_MODES)}")
+    return {
+        "master": {"paused": _bool(m.get("paused", False), "rewards.master.paused"), "mode": mode,
+                   "reason": _text(m.get("reason", ""), "rewards.master.reason", 200)},
+        "items": {k: _reward_item(items.get(k), k) for k in REWARDS},
+    }
+
+
+def _parse_dt(v: Any) -> Optional[datetime]:
+    """Admin-entered times without an offset are Ethiopia time (UTC+3)."""
+    if not v:
+        return None
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone(timedelta(hours=3)))
+
+
+def reward_state(config: Optional[dict], key: str, now: Optional[datetime] = None) -> dict:
+    """Effective state of one reward: master pause > its own switch > start time > stop time.
+    `new_blocked` = no new claims/grants; `payout_blocked` = already-earned rewards are held too."""
+    now = now or datetime.now(timezone.utc)
+    label = REWARDS.get(key, key)
+    rw = (config or {}).get("rewards") or DEFAULT_CONFIG["rewards"]
+    m = rw.get("master") or {}
+    it = (rw.get("items") or {}).get(key) or DEFAULT_CONFIG["rewards"]["items"].get(key, {})
+
+    def out(state: str, payout: bool, msg: str) -> dict:
+        return {"state": state, "new_blocked": state != "on", "payout_blocked": payout, "message": msg}
+
+    if m.get("paused"):
+        return out("paused_all", m.get("mode") == "all", m.get("reason") or "Rewards are temporarily paused.")
+    if not it.get("enabled", True):
+        return out("stopped", it.get("mode") == "all", it.get("reason") or f"{label} is temporarily paused.")
+    start, stop = _parse_dt(it.get("start_at")), _parse_dt(it.get("stop_at"))
+    if start and now < start:
+        return out("scheduled", False, f"{label} has not started yet.")
+    if stop and now >= stop:
+        return out("ended", False, f"{label} has ended.")
+    if not _in_windows(it.get("windows") or [], now):
+        return out("off_window", False, f"{label} runs at set times only.")
+    return out("on", False, "")
+
+
 def normalize_config(raw: Optional[dict]) -> dict:
     """Merge `raw` onto the defaults, coerce every value and drop unknown keys.
 
@@ -378,6 +586,8 @@ def normalize_config(raw: Optional[dict]) -> dict:
     }
 
     cfg["promotions"] = normalize_promotions(raw.get("promotions"))
+    cfg["rewards"] = normalize_rewards(raw.get("rewards"))
+    cfg["experience"] = normalize_experience(raw.get("experience"))
     cfg["settings"] = normalize_settings_overlay(raw.get("settings"))
     return cfg
 
@@ -427,6 +637,8 @@ PERMISSIONS = {
     "control.edit": "Edit the control draft (games, money, content, flags)",
     "control.publish": "Publish, discard and roll back control changes",
     "control.emergency": "Use maintenance mode and the kill switch instantly",
+    "experience.edit": "Edit game-experience settings (celebrations, countdown, voice, timings)",
+    "rewards.manage": "Start, stop and schedule rewards; reward blocks and manual grants",
     "staff.manage": "Add or remove staff and change roles",
     "audit.view": "View the audit log",
 }
@@ -441,11 +653,11 @@ ROLE_LABELS = {
 
 ROLE_PRESETS: dict[str, frozenset] = {
     "super": frozenset(PERMISSIONS),
-    "manager": frozenset({"control.edit", "control.publish", "control.emergency", "players.view", "audit.view"}),
+    "manager": frozenset({"control.edit", "control.publish", "control.emergency", "experience.edit", "rewards.manage", "players.view", "audit.view"}),
     "finance": frozenset({"money.approve", "money.approve_large", "players.view", "audit.view"}),
     "support": frozenset({"players.view", "players.ban", "players.notes"}),
     # Existing admins keep what they could do before: money approvals + read access, plus drafting.
-    "admin": frozenset({"money.approve", "players.view", "control.edit", "audit.view"}),
+    "admin": frozenset({"money.approve", "players.view", "control.edit", "experience.edit", "audit.view"}),
 }
 ASSIGNABLE_ROLES = ("manager", "finance", "support", "admin")
 
@@ -591,6 +803,8 @@ def public_view(config: dict, now: Optional[datetime] = None) -> dict:
         ),
         "texts": {k: v for k, v in content.get("texts", {}).items() if v},
         "promotions": _active_promotions_public(cfg, now),
+        "experience": cfg.get("experience") or EXPERIENCE_DEFAULTS,
+        "rewards": _rewards_public(cfg, now),
     }
 
 

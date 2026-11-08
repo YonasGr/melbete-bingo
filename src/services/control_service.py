@@ -21,7 +21,7 @@ from src.services import control_logic as cl
 logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 5.0  # multi-container: another instance picks up a publish within this window
-EMERGENCY_SECTIONS = ("maintenance", "kill_switch")
+EMERGENCY_SECTIONS = ("maintenance", "kill_switch", "rewards")
 
 
 class ControlError(Exception):
@@ -214,13 +214,15 @@ class ControlService:
     # ------------------------------------------------------------------
 
     async def save_draft(self, admin_id: str, config: dict, ip: Optional[str] = None) -> dict:
-        await self.require(admin_id, "control.edit")
         row = await self.repo.get()
         published = cl.normalize_config(row.get("published") or {})
         try:
             draft = self._with_emergency_from(cl.normalize_config(config), published)
         except ValueError as e:
             raise ControlError(str(e))
+        # Game-experience-only drafts need just "experience.edit"; anything else needs "control.edit".
+        sections = {c["path"].split(".")[0] for c in cl.diff_config(published, draft)}
+        await self.require(admin_id, "experience.edit" if sections <= {"experience"} and sections else "control.edit")
         # Settings overlay: keep only values that actually differ from what is live right now.
         live = self._live_settings(await self.admin_service.get_settings())
         draft["settings"] = {k: v for k, v in draft["settings"].items() if live.get(k) != v}
@@ -355,6 +357,83 @@ class ControlService:
     # Enforcement helpers used by the wallet, room, bonus and agent code paths
     # ------------------------------------------------------------------
 
+    def peek_timing(self, key: str, default: int) -> int:
+        """Sync read of experience.timing from the cached published config (0 / no cache = default)."""
+        try:
+            v = int(((self._cache or {}).get("experience") or {}).get("timing", {}).get(key, 0) or 0)
+        except Exception:  # noqa: BLE001
+            v = 0
+        return v or default
+
+    async def reward_block(self, key: str, *, payout: bool = False) -> str:
+        """'' when a reward may be granted (payout=True: when an already-earned one may be paid out),
+        otherwise the message to show. Fails open on any error."""
+        try:
+            st = cl.reward_state(await self.get_published(), key)
+        except Exception:  # noqa: BLE001
+            return ""
+        return st["message"] if (st["payout_blocked"] if payout else st["new_blocked"]) else ""
+
+    async def reward_player_block(self, key: str, player_id: str) -> str:
+        """'' when this player may receive this reward: not blocked by an admin, and inside the reward's
+        eligibility filters (new players only / minimum deposits). Fails open on errors."""
+        try:
+            from datetime import datetime, timezone
+
+            from src.core.db import get_pool
+            cfg = await self.get_published()
+            it = ((cfg.get("rewards") or {}).get("items") or {}).get(key) or {}
+            el = it.get("elig") or {}
+            pool = await get_pool()
+            if await pool.fetchval("SELECT 1 FROM reward_player_overrides WHERE player_id = $1", player_id):
+                return "Rewards are not available on this account."
+            label = cl.REWARDS.get(key, key)
+            if el.get("new_players_days"):
+                created = await pool.fetchval("SELECT created_at FROM players WHERE id = $1", player_id)
+                if created and (datetime.now(timezone.utc) - created).days >= int(el["new_players_days"]):
+                    return f"{label} is for new players only."
+            if el.get("min_deposits_etb"):
+                dep = await pool.fetchval("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE player_id = $1 AND type = 'top_up_approved'", player_id)
+                if int(dep or 0) < int(el["min_deposits_etb"]):
+                    return f"Deposit at least {el['min_deposits_etb']} ETB to unlock {label}."
+        except Exception:  # noqa: BLE001
+            logger.exception("reward eligibility unreadable for %s; allowing", key)
+        return ""
+
+    async def apply_rewards(self, admin_id: str, rewards: dict, *, action: str, summary: str,
+                            key: Optional[str] = None, ip: Optional[str] = None, alert: bool = False) -> dict:
+        """Instant, audited change to the rewards section (start/stop, timers, pause-all, undo). Not part of drafts."""
+        if admin_id not in ("auto", "system"):
+            await self.require(admin_id, "rewards.manage")
+        row = await self.repo.get()
+        published = cl.normalize_config(row.get("published") or {})
+        new = copy.deepcopy(published)
+        new["rewards"] = rewards
+        try:
+            new = cl.normalize_config(new)
+        except ValueError as e:
+            raise ControlError(str(e))
+        await self.repo.set_published_direct(new, str(admin_id))
+        self.invalidate()
+        await self.audit(admin_id, f"rewards.{action}", target_type="rewards", target_id=key or "all", ip=ip,
+                         summary=summary, before=published["rewards"], after=new["rewards"])
+        if alert:
+            role = None if admin_id in ("auto", "system") else await self._role_of(admin_id)
+            await self._alert("emergency", {"summary": summary[:1].upper() + summary[1:], "actor": admin_id, "role": role})
+        return new["rewards"]
+
+    async def auto_stop_reward(self, key: str, reason: str) -> bool:
+        """Budget guard: stop NEW claims of one reward. Returns False if it was not running."""
+        row = await self.repo.get()
+        cur = cl.normalize_config(row.get("published") or {})["rewards"]
+        if key not in cur["items"] or not cur["items"][key]["enabled"]:
+            return False
+        rewards = copy.deepcopy(cur)
+        rewards["items"][key].update(enabled=False, mode="new", reason=reason[:200])
+        await self.apply_rewards("auto", rewards, action="auto_stop", key=key, alert=True,
+                                 summary=f"{cl.REWARDS[key]} auto-stopped: {reason}")
+        return True
+
     async def flag_block(self, flag: str) -> str:
         """'' when allowed, otherwise the message to show the player."""
         ok, msg = cl.flag_state(await self.get_published(), flag)
@@ -434,3 +513,17 @@ def get_control_service() -> ControlService:
     if _instance is None:
         _instance = ControlService()
     return _instance
+
+
+async def reward_blocked(key: str, payout: bool = False, player_id: Optional[str] = None) -> str:
+    """Module-level shortcut for the reward services: '' = allowed. Fails open."""
+    try:
+        from src.api.dependencies import get_control_service as _gcs
+        svc = _gcs()
+        msg = await svc.reward_block(key, payout=payout)
+        if not msg and player_id and not payout:
+            msg = await svc.reward_player_block(key, player_id)
+        return msg
+    except Exception:  # noqa: BLE001
+        logger.exception("reward switch unreadable for %s; allowing", key)
+        return ""

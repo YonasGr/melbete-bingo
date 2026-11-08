@@ -18,7 +18,7 @@
   LOADERS.control = loadControl;
 
   const SECTIONS = [
-    ["games", "Games"], ["money", "Money"], ["content", "Content"], ["promotions", "Promotions"], ["switches", "Switches"],
+    ["games", "Games"], ["money", "Money"], ["content", "Content"], ["promotions", "Promotions"], ["experience", "Experience"], ["switches", "Switches"],
     ["alerts", "Alerts"], ["players", "Players"], ["staff", "Staff"], ["audit", "Audit"],
   ];
   const TRACK_NAMES = { real_10: "Real money · 10 ETB", real_50: "Real money · 50 ETB", bonus: "Bonus balance" };
@@ -104,7 +104,7 @@
     const s = cc.snap, n = s.changes.length;
     const status = cc.dirty ? `<b class="cc-warn">Unsaved edits</b>` : s.has_draft ? `<b>${n} unpublished change${n === 1 ? "" : "s"}</b><small>Draft by ${esc(s.draft_by || "?")} · ${fmtTime(s.draft_updated_at)}</small>` : `<b>All changes are live</b><small>Version ${s.version}${s.published_at ? ` · published ${fmtTime(s.published_at)}` : ""}</small>`;
     return `<div class="cc-bar"><div class="cc-bar-status">${status}</div><div class="cc-bar-actions">
-      ${can("control.edit") ? `<button class="secondary-btn" data-act="save" ${cc.dirty ? "" : "disabled"}>Save draft</button>` : ""}
+      ${can("control.edit") || can("experience.edit") ? `<button class="secondary-btn" data-act="save" ${cc.dirty ? "" : "disabled"}>Save draft</button>` : ""}
       ${can("control.edit") && s.has_draft && !cc.dirty ? `<button class="secondary-btn" data-act="discard">Discard</button>` : ""}
       ${can("control.publish") ? `<button class="primary-btn" data-act="publish" ${s.has_draft && !cc.dirty ? "" : "disabled"}>Publish</button>` : ""}
       ${can("control.publish") && s.can_rollback ? `<button class="secondary-btn" data-act="rollback">Undo last publish</button>` : ""}
@@ -112,14 +112,40 @@
   }
   function renderSection() {
     const body = $("cc-body");
-    const fn = { games: gamesHtml, money: moneyHtml, content: contentHtml, promotions: promotionsHtml, switches: switchesHtml, alerts: alertsHtml, players: playersHtml, staff: staffHtml, audit: auditHtml }[cc.section];
-    body.innerHTML = `<fieldset class="cc-fieldset" ${["players", "staff", "audit", "switches", "alerts"].includes(cc.section) ? "" : lock()}>${fn()}</fieldset>`;
+    const fn = { games: gamesHtml, money: moneyHtml, content: contentHtml, promotions: promotionsHtml, experience: experienceHtml, switches: switchesHtml, alerts: alertsHtml, players: playersHtml, staff: staffHtml, audit: auditHtml }[cc.section];
+    body.innerHTML = `<fieldset class="cc-fieldset" ${["players", "staff", "audit", "switches", "alerts"].includes(cc.section) ? "" : cc.section === "experience" ? (can("control.edit") || can("experience.edit") ? "" : "disabled") : lock()}>${fn()}</fieldset>`;
     if (cc.section === "staff") loadStaff();
     if (cc.section === "alerts") loadAlertsMine();
     if (cc.section === "audit") loadAudit(true);
   }
 
   /* ---------------- sections ---------------- */
+  function selectField(text, path, options, hint = "") {
+    const cur = getPath(cc.draft, path);
+    return `<div class="field"><label>${esc(text)}</label><select data-path="${path}" data-type="text">${options.map(([v, n]) => `<option value="${v}" ${cur === v ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>${hint ? `<small class="cc-hint">${esc(hint)}</small>` : ""}</div>`;
+  }
+  function openFlowDemo() {
+    const cfg = btoa(unescape(encodeURIComponent(JSON.stringify(cc.draft.experience || {}))));
+    window.open(`/static/flow-demo.html?cfg=${encodeURIComponent(cfg)}`, "_blank", "noopener");
+  }
+  function experienceHtml() {
+    const card = (h, p, body) => `<article class="work-panel cc-card"><div class="panel-heading"><div><h3>${h}</h3><p>${p}</p></div></div>${body}</article>`;
+    return `<div class="cc-cards">
+      <article class="work-panel cc-card"><div class="panel-heading"><div><h3>Test as player</h3><p>Plays the get-ready splash, countdown ring and win screens with the settings below (unsaved edits included). No real round, no money.</p></div><button class="primary-btn" type="button" data-act="flow-demo">Test as player</button></div></article>
+      ${card("Win celebrations", "Bigger wins get a bigger show", `<div class="form-grid">${field("Big win from", "experience.tiers.big_win_etb", { unit: "ETB", min: 1, hint: "Gold glow + extra confetti" })}${field("Jackpot from", "experience.tiers.jackpot_etb", { unit: "ETB", min: 1, hint: "Full-screen gold burst + JACKPOT banner" })}</div>
+        ${toggle("experience.tiers.jackpot_burst", "Jackpot burst and banner")}${toggle("experience.tiers.coin_fly", "Coin flies into the balance after a win")}`)}
+      ${card("Lobby countdown", "What players see while the round fills", `<div class="form-grid">${field("Show 'picking closes soon' at", "experience.countdown.warn_seconds", { unit: "seconds left", min: 0, max: 120 })}${field("Ring turns red at", "experience.countdown.hot_seconds", { unit: "seconds left", min: 0, max: 60 })}</div>
+        ${toggle("experience.countdown.lobby_feed", "Live feed: 'Cartela #47 was taken'")}${toggle("experience.countdown.show_pool", "Show cartelas taken and ETB staked")}`)}
+      ${card("Round start and play", "Splash, alerts and the verify moment", `${toggle("experience.splash.enabled", "Get-ready splash (3-2-1)")}${field("Splash length", "experience.splash.seconds", { unit: "seconds", min: 1, max: 5 })}
+        ${toggle("experience.alerts.near_win", "'1 number away!' alert on cards")}${toggle("experience.alerts.haptics", "Phone vibration cues")}
+        ${field("'Checking your card…' shows for at least", "experience.verify.min_ms", { unit: "milliseconds", min: 0, max: 3000, hint: "0 turns the verify screen off" })}`)}
+      ${card("Called-number voice", "Reads each ball aloud with the phone's own speech", selectField("Voice", "experience.voice.mode", [["player", "Each player chooses (off by default)"], ["on_by_default", "On by default (player can turn off)"], ["off", "Off for everyone"]]))}
+      ${card("Random pick and rematch", "The dice button and play-again", `${field("Dice offers", "experience.random_picker.choices", { unit: "cartelas", min: 0, max: 5, hint: "0 = pick one instantly, no choice" })}${toggle("experience.rematch.keep_cartelas", "Play again keeps the same cartelas", "Off: players choose fresh cartelas each round")}`)}
+      ${card("Room rules in one place", "Same values as Games > Rules; changing them here changes them there", `<div class="form-grid">${field("Cartelas needed to start", "settings.min_cartelas_to_start", { min: 1, max: 500 })}${field("Cartelas per player", "settings.cards_per_player", { min: 1, max: 4 })}${field("Lobby countdown", "settings.lobby_countdown_seconds", { unit: "seconds", min: 5, max: 300 })}${field("Seconds between balls", "settings.draw_interval", { unit: "seconds", min: 1, max: 30 })}
+        ${field("Picking locks for the last", "experience.timing.lock_seconds", { unit: "seconds", min: 0, max: 30, hint: "0 = default (5)" })}${field("Next round starts after", "experience.timing.next_round_seconds", { unit: "seconds", min: 0, max: 300, hint: "0 = server default (15)" })}</div>`)}
+    </div>`;
+  }
+
   function gamesHtml() {
     const active = cc.snap.active_tracks || ["real_10"];
     const trackCards = cc.snap.tracks.map((t) => {
@@ -427,6 +453,7 @@
       if (act === "rollback") { if (await confirmDialog("Undo last publish", "<p>Restore the configuration from before the last publish? Settings it changed go back too.</p>", "Undo publish", true)) { adopt(await api("/api/admin/control/rollback", { method: "POST" })); toast("Rolled back", "success"); render(); } return; }
       if (act === "maint" || act === "kill") return await emergency(act);
       if (act === "promo-add") return addPromotion();
+      if (act === "flow-demo") return openFlowDemo();
       if (act === "promo-del") return removePromotion(Number(e.target.closest("[data-i]").dataset.i));
       if (act === "psearch") return await searchPlayers();
       if (act === "aufilter") return await loadAudit(true);

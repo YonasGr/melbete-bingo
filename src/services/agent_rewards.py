@@ -165,6 +165,9 @@ class AgentRewardService:
             return None
 
     async def _on_player_deposit(self, player_id: str, amount: int, txn_id: str) -> Optional[str]:
+        from src.services.control_service import reward_blocked
+        if await reward_blocked("agent_rewards"):
+            return None   # new agent rewards are paused
         state = await self.agents.player_deposit_state(player_id)
         if not state or not state.get("agent_id"):
             return None
@@ -222,7 +225,11 @@ class AgentRewardService:
         if not settings["enabled"]:
             return result
 
-        if settings["retention_bonus"] > 0:
+        from src.services.control_service import reward_blocked
+        new_paused = bool(await reward_blocked("agent_rewards"))
+        pay_paused = bool(await reward_blocked("agent_rewards", payout=True))
+
+        if settings["retention_bonus"] > 0 and not new_paused:
             for c in await self.agents.retention_candidates(
                 now - timedelta(days=settings["retention_days"]), now - timedelta(days=RETENTION_ACTIVE_WINDOW_DAYS),
             ):
@@ -232,7 +239,7 @@ class AgentRewardService:
                 ):
                     result["retention_created"] += 1
 
-        for rw in await self.agents.due_rewards():
+        for rw in ([] if pay_paused else await self.agents.due_rewards()):   # "stop everything" holds payouts too
             outcome = await self._settle(rw, settings, now)
             if outcome == "paid":
                 result["paid"] += 1

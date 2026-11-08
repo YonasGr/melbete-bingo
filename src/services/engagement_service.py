@@ -84,13 +84,15 @@ class EngagementService:
         and pays the streak reward when a milestone is reached (once per streak run)."""
         rewards = parse_streak_rewards(self.cfg.engagement_streak_rewards)
         now = self._now()
+        from src.services.control_service import reward_blocked
+        streak_paused = bool(await reward_blocked("streak_winback"))
         day = eat_day(now)
         for pid in set(player_ids):
             try:
                 state = await self.repo.record_play(pid, day, now)
                 streak = int(state["streak_days"])
                 amount = rewards.get(streak)
-                if amount and await self.repo.claim_streak_reward(pid, streak):
+                if amount and not streak_paused and not await reward_blocked("streak_winback", player_id=pid) and await self.repo.claim_streak_reward(pid, streak):
                     # The claim above is the once-only guard; if paying fails we log loudly rather than
                     # risk paying the same milestone twice.
                     await self.wallets.credit_engagement_bonus(pid, amount, "streak_reward", f"{streak}-day play streak")
@@ -160,6 +162,9 @@ class EngagementService:
 
     async def _run_winback(self, now: datetime) -> int:
         cfg = self.cfg
+        from src.services.control_service import reward_blocked
+        if await reward_blocked("streak_winback"):
+            return 0
         amount = cfg.engagement_winback_bonus_etb
         if amount <= 0 or cfg.engagement_winback_days <= 0:
             return 0

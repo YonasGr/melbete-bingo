@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Test as player - Melbete flow</title><meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/melbete-fonts.css"><link rel="stylesheet" href="/static/css/melbete-theme.css">
+<link rel="stylesheet" href="/static/css/melbete-premium.css"><link rel="stylesheet" href="/static/css/melbete-cosmic.css"><link rel="stylesheet" href="/static/css/melbete-flow.css"><link rel="stylesheet" href="/static/css/melbete-flow-premium.css">
+<style>body{padding:1rem;max-width:520px;margin:0 auto;font-family:Inter,system-ui,sans-serif;color:#F8FAFC}h1{font-family:Sora,Inter,sans-serif;font-size:1.3rem}.grid{display:grid;gap:.6rem;margin:1rem 0}.note{font-size:.8rem;opacity:.7}#stage{position:relative;min-height:60px}#wd{display:none}.winner-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:1400}</style></head>
+<body>
+<h1>Test as player</h1>
+<p class="note">Uses the settings from the Experience tab, including edits you haven't saved. Nothing here touches a real round or any money.</p>
+<div class="grid">
+  <button class="primary-btn" data-t="splash">▶ Get-ready splash</button>
+  <button class="secondary-btn" data-t="count">▶ Lobby countdown ring</button>
+  <button class="secondary-btn" data-t="near">▶ Card: 1 number away</button>
+  <button class="secondary-btn" data-t="verify">▶ Checking your card…</button>
+  <button class="secondary-btn" data-t="win">▶ Win: normal</button>
+  <button class="secondary-btn" data-t="big">▶ Win: big</button>
+  <button class="secondary-btn" data-t="jackpot">▶ Win: jackpot</button>
+  <button class="secondary-btn" data-t="other">▶ Someone else won</button>
+</div>
+<div id="stage"></div>
+<script>
+(() => {
+  "use strict";
+  const D = { tiers: { big_win_etb: 500, jackpot_etb: 2000, jackpot_burst: true, coin_fly: true }, countdown: { warn_seconds: 10, hot_seconds: 5, lobby_feed: true, show_pool: true }, splash: { enabled: true, seconds: 3 }, verify: { min_ms: 1100 } };
+  let cfg = {};
+  try { cfg = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(new URLSearchParams(location.search).get("cfg") || ""))))); } catch (e) { /* defaults */ }
+  const X = (g, k) => { const v = cfg[g]; return v && k in v ? v[k] : D[g][k]; };
+  const $s = document.getElementById("stage");
+  const mk = (cls, html) => { const e = document.createElement("div"); e.className = cls; e.innerHTML = html; return e; };
+  const LOGO = "/static/img/melbete-bingo-logo.png";
+
+  function splash() {
+    if (!X("splash", "enabled")) return say("Splash is switched off in your settings.");
+    let n = X("splash", "seconds");
+    const o = mk("flow-splash", `<div class="flow-splash-in"><img class="flow-splash-logo" src="${LOGO}" alt=""><div class="flow-splash-t">Get ready!</div><div class="flow-splash-n pop">${n}</div><div class="flow-splash-c"><span>#12</span><span>#47</span></div><div class="flow-splash-s">Stake 20 ETB</div></div>`);
+    document.body.appendChild(o);
+    const ne = o.querySelector(".flow-splash-n");
+    const iv = setInterval(() => { n--; if (n <= 0) { clearInterval(iv); o.classList.add("out"); setTimeout(() => o.remove(), 250); } else { ne.textContent = n; ne.classList.remove("pop"); void ne.offsetWidth; ne.classList.add("pop"); } }, 700);
+  }
+  function count() {
+    const total = 30, hot = X("countdown", "hot_seconds"), warn = X("countdown", "warn_seconds");
+    const b = mk("countdown-banner", `<div class="flow-ring"><svg viewBox="0 0 44 44"><circle class="bg" cx="22" cy="22" r="19"/><circle class="fg" cx="22" cy="22" r="19" pathLength="1"/></svg><b></b></div>${X("countdown", "show_pool") ? '<div class="flow-pool">9 cartela(s) · 180 ETB staked</div>' : ""}<div class="flow-warn hidden"></div>`);
+    $s.replaceChildren(b);
+    let s = total;
+    const tick = () => {
+      b.querySelector(".fg").style.strokeDashoffset = String(1 - s / total); b.querySelector("b").textContent = s;
+      b.classList.toggle("flow-hot", hot > 0 && s <= hot);
+      const w = b.querySelector(".flow-warn"); w.classList.toggle("hidden", !(warn > 0 && s <= warn && s > 0)); w.textContent = "⏳ Picking closes soon – confirm your cartela!";
+      if (s-- <= 0) clearInterval(iv);
+    };
+    const iv = setInterval(tick, 1000); tick();
+  }
+  function near() {
+    $s.replaceChildren(mk("preview-card", `<div class="flow-prog" style="margin:.5rem"><i style="width:80%"></i><span>🔥 1 number away!</span></div><p class="note" style="padding:0 .6rem .6rem">Real cards glow orange and buzz the phone once.</p>`));
+    $s.firstChild.classList.add("flow-near");
+  }
+  function verify() {
+    const ms = X("verify", "min_ms");
+    if (!ms) return say("Verify screen is switched off (0 ms).");
+    const v = mk("flow-verify", '<div class="flow-spin"></div><b>Checking your card…</b><small>Verifying with the server</small>');
+    document.body.appendChild(v); setTimeout(() => v.remove(), Math.max(ms, 600));
+  }
+  function win(kind) {
+    const amt = kind === "jackpot" ? X("tiers", "jackpot_etb") : kind === "big" ? X("tiers", "big_win_etb") : 120;
+    const other = kind === "other";
+    const o = mk(`winner-overlay flow-${other ? "other" : kind === "win" ? "win" : kind}`, `<div class="winner-overlay-content">${kind === "jackpot" && X("tiers", "jackpot_burst") ? '<div class="flow-jp">🏆 JACKPOT!</div>' : ""}<h2 id="winner-name">${other ? "Abebe" : "You"}</h2><div class="winner-payout" id="winner-payout">${other ? "won 340 ETB" : `You won ${amt} ETB`}</div>${other ? '<div class="flow-mine">Your cartelas <span>#12</span><span>#47</span> – not this time. Next round could be yours! 🍀</div>' : ""}<div class="flow-nr"><i style="width:60%"></i></div><button class="primary-btn" id="winner-rematch-btn" style="margin-top:1rem">Play again</button> <button class="secondary-btn" data-close>Close</button></div>`);
+    if (kind === "jackpot" && X("tiers", "jackpot_burst")) o.appendChild(mk("flow-burst", ""));
+    o.addEventListener("click", (e) => { if (e.target.dataset.close !== undefined) { o.remove(); if (!other && X("tiers", "coin_fly")) say("🪙 The coin would now fly into the balance."); } });
+    document.body.appendChild(o);
+  }
+  function say(t) { $s.replaceChildren(mk("note", t)); }
+  document.addEventListener("click", (e) => {
+    const t = e.target.dataset && e.target.dataset.t; if (!t) return;
+    ({ splash, count, near, verify, win: () => win("win"), big: () => win("big"), jackpot: () => win("jackpot"), other: () => win("other") })[t]();
+  });
+})();
+</script></body></html>

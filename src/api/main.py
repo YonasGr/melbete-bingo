@@ -325,7 +325,9 @@ async def round_cycler():
 
     while True:
         await asyncio.sleep(2)
-        seconds = settings.auto_next_round_seconds
+        from src.api.dependencies import get_control_service as _gcs
+        await _gcs().get_published()      # keeps the cache warm so timing overrides apply
+        seconds = _gcs().peek_timing("next_round_seconds", settings.auto_next_round_seconds)
         if seconds <= 0:
             continue
         try:

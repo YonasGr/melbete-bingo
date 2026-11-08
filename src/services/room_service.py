@@ -80,11 +80,16 @@ class RoomService:
         return max(room.countdown_seconds - elapsed, 0)
 
     def _assert_lobby_not_locked(self, room: GameRoom) -> None:
+        try:
+            from src.api.dependencies import get_control_service
+            lock = get_control_service().peek_timing("lock_seconds", self.LOBBY_LOCK_SECONDS)
+        except Exception:  # noqa: BLE001 - never let a settings read break picking
+            lock = self.LOBBY_LOCK_SECONDS
         remaining = self._countdown_remaining_seconds(room)
-        if remaining is not None and remaining <= self.LOBBY_LOCK_SECONDS:
+        if remaining is not None and remaining <= lock:
             raise InvalidStateError(
                 "The round is about to start - cartela selection is locked for the final "
-                f"{self.LOBBY_LOCK_SECONDS} seconds."
+                f"{lock} seconds."
             )
 
     def __init__(

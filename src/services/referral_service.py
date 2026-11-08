@@ -99,6 +99,9 @@ class ReferralService:
         nothing was paid (no referrer, already awarded, or over cap)."""
         if not referred_player.referred_by:
             return None
+        from src.services.control_service import reward_blocked
+        if await reward_blocked("referral"):
+            return None   # referral rewards are paused in the Control Center
         referral = await self.referrals.get_by_referred_id(referred_player.id)
         if not referral or referral.awarded:
             return None  # not referred, or this exact referral was already paid - never pay twice

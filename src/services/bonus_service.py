@@ -64,7 +64,8 @@ async def _cashback_paused_by_control() -> bool:
     """True when the Control Center's "Daily cashback" switch (or the kill switch) is off. Fails closed."""
     try:
         from src.api.dependencies import get_control_service
-        return bool(await get_control_service().flag_block("cashback"))
+        cs = get_control_service()
+        return bool(await cs.flag_block("cashback") or await cs.reward_block("cashback"))
     except Exception:  # noqa: BLE001
         logger.exception("could not read the cashback switch; skipping cashback this time")
         return True
@@ -270,10 +271,28 @@ class BonusService:
         except RuntimeError:
             pass
 
+    async def _spike_brake(self, reward_type: str, pool) -> None:
+        """Abuse brake: stop a reward's new claims when it is claimed far more often than the admin allows."""
+        from src.api.dependencies import get_control_service
+        cs = get_control_service()
+        it = ((await cs.get_published()).get("rewards") or {}).get("items", {}).get(reward_type) or {}
+        limit, mins = int(it.get("spike_limit") or 0), int(it.get("spike_minutes") or 10)
+        if not limit or not it.get("enabled", True):
+            return
+        n = int(await pool.fetchval(
+            "SELECT COUNT(*) FROM bonus_ledger WHERE reward_type=$1 AND entry_type='grant' AND created_at > now() - make_interval(mins => $2::int)",
+            reward_type, mins) or 0)
+        if n >= limit:
+            await cs.auto_stop_reward(reward_type, f"claim spike: {n} claims in {mins} min (limit {limit})")
+
     async def check_budget_alert(self, reward_type: str) -> None:
         """Tell admins (Telegram) when a campaign reaches 80% and 100% of its daily or total budget."""
         try:
             pool = await get_pool()
+            try:
+                await self._spike_brake(reward_type, pool)
+            except Exception:  # noqa: BLE001
+                logger.exception("spike brake failed for %s", reward_type)
             camp = await pool.fetchrow("SELECT daily_budget_etb, total_budget_etb FROM bonus_campaigns WHERE reward_type=$1", reward_type)
             if not camp:
                 return
@@ -282,6 +301,14 @@ class BonusService:
             from src.services.admin_alerts import get_alert_service
             for scope, used, budget, key in (("daily", use["today_etb"], int(camp["daily_budget_etb"]), today), ("total", use["total_etb"], int(camp["total_budget_etb"]), "all")):
                 level = budget_alert_level(used, budget)
+                try:
+                    from src.api.dependencies import get_control_service
+                    cs = get_control_service()
+                    pct = int((await cs.get_published())["rewards"]["items"].get(reward_type, {}).get("auto_stop_pct", 0) or 0)
+                    if pct and budget > 0 and used * 100 >= pct * budget:
+                        await cs.auto_stop_reward(reward_type, f"reached {pct}% of the {scope} budget ({used}/{budget} ETB)")
+                except Exception:  # noqa: BLE001
+                    logger.exception("budget auto-stop failed for %s", reward_type)
                 if level:
                     get_alert_service().schedule(
                         "bonus_budget", {"reward_type": reward_type, "scope": scope, "level": level, "used": used, "budget": budget},
@@ -292,6 +319,10 @@ class BonusService:
     async def claim(self, player_id: str, reward_type: str, idempotency_key: str) -> dict:
         if reward_type not in {"welcome", "daily"}:
             raise BonusError("INVALID_REWARD", "This reward cannot be claimed directly.")
+        from src.services.control_service import reward_blocked
+        paused = await reward_blocked(reward_type, player_id=player_id)
+        if paused:
+            raise BonusError("PAUSED", paused, 403)
         key = (idempotency_key or "").strip()
         if not 8 <= len(key) <= 128:
             raise BonusError("INVALID_IDEMPOTENCY_KEY", "A valid idempotency key is required.")
@@ -369,6 +400,9 @@ class BonusService:
         """
         if deposit_amount_etb <= 0:
             return {"status": "not_eligible"}
+        from src.services.control_service import reward_blocked
+        if await reward_blocked("first_deposit", player_id=player_id):
+            return {"status": "paused"}
         key = f"first-deposit:{deposit_id}"
         now = datetime.now(timezone.utc)
         await c.execute("SELECT pg_advisory_xact_lock(hashtext('melbete_bonus_campaign'))")
@@ -417,6 +451,9 @@ class BonusService:
 
     async def qualify_referral(self, referred_player_id: str, idempotency_key: str) -> dict:
         """Pay the referrer once when the referred player completes onboarding."""
+        from src.services.control_service import reward_blocked
+        if await reward_blocked("referral"):
+            return {"status": "paused"}
         pool = await get_pool()
         key = (idempotency_key or f"referral:{referred_player_id}").strip()
         async with pool.acquire() as c:

@@ -8,7 +8,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
-from datetime import timedelta
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 from src.api.dependencies import (
     get_admin_service, get_control_service, get_room_service, manager, require_admin_dep, require_perm,
@@ -457,3 +458,257 @@ async def alerts_test(admin_id: str = Depends(require_admin_dep)):
     reason = "; ".join(result["errors"]) or "unknown"
     hint = "Open the bot in Telegram and press Start, then try again." if "Forbidden" in reason or "BadRequest" in reason else ""
     raise HTTPException(status_code=502, detail=f"Could not deliver ({reason}). {hint}".strip())
+
+
+# ---------------------------------------------------------------------------
+# Rewards control board: start / stop each promotional reward, timers, pause-all, history + undo
+# ---------------------------------------------------------------------------
+
+_REWARD_TX_TYPES = {
+    "missions": ("mission_reward",),
+    "streak_winback": ("streak_reward", "winback_bonus"),
+    "leaderboard_prizes": ("leaderboard_reward",),
+}
+_CAMPAIGN_REWARDS = ("welcome", "daily", "first_deposit", "referral", "cashback")
+
+
+async def _reward_stats(days: int = 7) -> tuple[dict, dict, list]:
+    """(campaigns, series, dates): campaign rows by reward, {reward: {date: (n, etb)}}, last `days` Ethiopia dates."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from src.core.db import get_pool
+    from src.services.bonus_service import BonusService
+
+    addis = ZoneInfo("Africa/Addis_Ababa")
+    today = datetime.now(addis).date()
+    dates = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
+    campaigns: dict = {}
+    series: dict = {}
+    try:
+        pool = await get_pool()
+        for r in await pool.fetch("SELECT reward_type, enabled, amount_etb, daily_budget_etb, total_budget_etb FROM bonus_campaigns"):
+            campaigns[r["reward_type"]] = dict(r)
+        for r in await pool.fetch(
+            "SELECT (created_at AT TIME ZONE 'Africa/Addis_Ababa')::date AS d, reward_type AS k, COUNT(*) AS n, COALESCE(SUM(amount_etb),0) AS etb "
+            "FROM bonus_ledger WHERE entry_type='grant' AND amount_etb > 0 AND created_at >= now() - interval '9 days' GROUP BY d, k"
+        ):
+            series.setdefault(r["k"], {})[r["d"].isoformat()] = (int(r["n"]), int(r["etb"]))
+        for key, types in _REWARD_TX_TYPES.items():
+            for r in await pool.fetch(
+                "SELECT (created_at AT TIME ZONE 'Africa/Addis_Ababa')::date AS d, COUNT(*) AS n, COALESCE(SUM(amount),0) AS etb "
+                "FROM transactions WHERE type = ANY($1) AND created_at >= now() - interval '9 days' GROUP BY d", list(types)
+            ):
+                cur = series.setdefault(key, {}).get(r["d"].isoformat(), (0, 0))
+                series[key][r["d"].isoformat()] = (cur[0] + int(r["n"]), cur[1] + int(r["etb"]))
+    except Exception:  # noqa: BLE001 - the board still works (switches) without the numbers
+        logger.exception("reward stats unavailable")
+    usage = {}
+    try:
+        usage = await BonusService().budget_usage()
+    except Exception:  # noqa: BLE001
+        logger.exception("reward budget usage unavailable")
+    return campaigns, {"series": series, "usage": usage}, dates
+
+
+@router.get("/api/admin/rewards/board")
+async def rewards_board(admin_id: str = Depends(require_admin_dep)):
+    svc = get_control_service()
+    row = await svc.repo.get()
+    cfg = cl.normalize_config(row.get("published") or {})
+    campaigns, extra, dates = await _reward_stats()
+    items = []
+    for key, label in cl.REWARDS.items():
+        st = cl.reward_state(cfg, key)
+        ser = extra["series"].get(key, {})
+        days = [{"date": d, "claims": ser.get(d, (0, 0))[0], "etb": ser.get(d, (0, 0))[1]} for d in dates]
+        use = extra["usage"].get(key) or ({"today_etb": days[-1]["etb"], "total_etb": None, "today_count": days[-1]["claims"]}
+                                            if key in _REWARD_TX_TYPES else None)
+        items.append({"key": key, "label": label, "config": cfg["rewards"]["items"][key], "state": st["state"], "message": st["message"],
+                      "preview": _reward_preview(cfg["rewards"]["items"][key], st, label),
+                      "campaign": campaigns.get(key) if key in _CAMPAIGN_REWARDS else None, "usage": use, "days": days})
+    history = []
+    for r in await svc.audit_repo.list(limit=25, action_prefix="rewards."):
+        history.append({"id": r["id"], "created_at": r["created_at"].isoformat(), "actor_id": r["actor_id"], "actor_role": r["actor_role"],
+                        "action": r["action"], "summary": r["summary"], "undoable": bool(r.get("before_json"))})
+    perms = await svc.permissions(admin_id)
+    return {"master": cfg["rewards"]["master"], "items": items, "history": history, "can_edit": "rewards.manage" in perms}
+
+
+@router.post("/api/admin/rewards/action")
+async def rewards_action(request: Request, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
+    """Instant, audited: stop / start one reward, set its timer or budget auto-stop, pause or resume all."""
+    import copy
+
+    svc = get_control_service()
+    op, key = payload.get("op"), payload.get("key")
+    cur = cl.normalize_config((await svc.repo.get()).get("published") or {})["rewards"]
+    new = copy.deepcopy(cur)
+    reason = str(payload.get("reason") or "").strip()[:200]
+    mode = payload.get("mode") or "new"
+    if mode not in cl.REWARD_MODES:
+        raise HTTPException(status_code=400, detail="Unknown stop mode")
+    label = cl.REWARDS.get(key, "")
+    if op in ("stop", "start", "schedule", "auto_stop", "flash", "windows", "elig", "spike") and key not in cl.REWARDS:
+        raise HTTPException(status_code=400, detail="Unknown reward")
+    how = "new claims only" if mode == "new" else "everything held, including earned rewards"
+    if op == "stop":
+        new["items"][key].update(enabled=False, mode=mode, reason=reason)
+        summary = f"{label} stopped ({how})" + (f": {reason}" if reason else "")
+    elif op == "start":
+        it = new["items"][key]
+        now = datetime.now(timezone.utc)
+        stop, start = cl._parse_dt(it["stop_at"]), cl._parse_dt(it["start_at"])
+        it.update(enabled=True, reason="", stop_at="" if (stop and stop <= now) else it["stop_at"],
+                  start_at="" if (start and start > now) else it["start_at"])
+        summary = f"{label} started"
+        if key in _CAMPAIGN_REWARDS:
+            from src.core.db import get_pool
+            await (await get_pool()).execute("UPDATE bonus_campaigns SET enabled = TRUE, updated_at = now() WHERE reward_type = $1", key)
+            summary += " (campaign switched on)"
+    elif op == "schedule":
+        new["items"][key].update(start_at=str(payload.get("start_at") or ""), stop_at=str(payload.get("stop_at") or ""))
+        summary = f"{label} timer: start {new['items'][key]['start_at'] or '-'}, stop {new['items'][key]['stop_at'] or '-'}"
+    elif op == "auto_stop":
+        new["items"][key]["auto_stop_pct"] = int(payload.get("auto_stop_pct") or 0)
+        summary = f"{label} auto-stop at {new['items'][key]['auto_stop_pct']}% of budget" if new["items"][key]["auto_stop_pct"] else f"{label} budget auto-stop off"
+    elif op == "flash":
+        mins = int(payload.get("minutes") or 0)
+        if mins < 5 or mins > 7 * 24 * 60:
+            raise HTTPException(status_code=400, detail="Flash promos run from 5 minutes to 7 days")
+        end = datetime.now(timezone.utc) + timedelta(minutes=mins)
+        new["items"][key].update(enabled=True, reason="", start_at="", stop_at=end.isoformat(timespec="seconds"))
+        summary = f"{label} flash promo: runs for {mins // 60}h {mins % 60}m, then stops by itself"
+        if key in _CAMPAIGN_REWARDS:
+            from src.core.db import get_pool
+            await (await get_pool()).execute("UPDATE bonus_campaigns SET enabled = TRUE, updated_at = now() WHERE reward_type = $1", key)
+    elif op == "windows":
+        new["items"][key]["windows"] = payload.get("windows") or []
+        summary = f"{label} weekly windows updated ({len(new['items'][key]['windows'])} window(s); none = always)"
+    elif op == "elig":
+        new["items"][key]["elig"] = {"new_players_days": int(payload.get("new_players_days") or 0), "min_deposits_etb": int(payload.get("min_deposits_etb") or 0)}
+        summary = f"{label} eligibility: new players within {new['items'][key]['elig']['new_players_days'] or 'any'} days, min deposits {new['items'][key]['elig']['min_deposits_etb']} ETB"
+    elif op == "spike":
+        new["items"][key].update(spike_limit=int(payload.get("spike_limit") or 0), spike_minutes=int(payload.get("spike_minutes") or 10))
+        it = new["items"][key]
+        summary = f"{label} abuse brake: " + (f"stop after {it['spike_limit']} claims in {it['spike_minutes']} min" if it["spike_limit"] else "off")
+    elif op == "pause_all":
+        new["master"] = {"paused": True, "mode": mode, "reason": reason}
+        summary = f"ALL rewards paused ({how})" + (f": {reason}" if reason else "")
+    elif op == "resume_all":
+        new["master"] = {"paused": False, "mode": "new", "reason": ""}
+        summary = "All rewards resumed (each reward keeps its own switch)"
+    else:
+        raise HTTPException(status_code=400, detail="Unknown action")
+    notify = bool(payload.get("notify")) and op in ("start", "flash", "stop")
+    try:
+        await svc.apply_rewards(admin_id, new, action=op, summary=summary + (" (players notified)" if notify else ""), key=key,
+                                ip=client_ip(request), alert=op in ("stop", "pause_all"))
+    except ControlError as e:
+        _raise(e)
+    if notify:
+        text = (f"⏸ {label} is paused for now." if op == "stop" else
+                f"🎁 {label} is live for a limited time - claim it in the Bonus Center!" if op == "flash" else f"🎁 {label} is live - open the Bonus Center to claim it!")
+        asyncio.create_task(_broadcast_safely(text))
+    return await rewards_board(admin_id=admin_id)
+
+
+@router.post("/api/admin/rewards/undo")
+async def rewards_undo(request: Request, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
+    """Put the rewards settings back to how they were before one of the last changes."""
+    import json
+
+    svc = get_control_service()
+    try:
+        wanted = int(payload.get("audit_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="audit_id is required")
+    hit = next((r for r in await svc.audit_repo.list(limit=100, action_prefix="rewards.") if r["id"] == wanted), None)
+    if not hit or not hit.get("before_json"):
+        raise HTTPException(status_code=404, detail="That change can't be undone")
+    before = hit["before_json"]
+    if isinstance(before, str):
+        before = json.loads(before)
+    try:
+        await svc.apply_rewards(admin_id, before, action="undo", key=hit.get("target_id"), ip=client_ip(request),
+                                summary=f"Undid change #{wanted}: {hit.get('summary') or hit['action']}")
+    except ControlError as e:
+        _raise(e)
+    return await rewards_board(admin_id=admin_id)
+
+
+def _reward_preview(item: dict, st: dict, label: str) -> str:
+    """One line: what players see in the Bonus Center for this reward right now."""
+    if st["state"] == "on":
+        return f"{label}: claimable now" + (f" · ends {item['stop_at'][:16].replace('T', ' ')}" if item.get("stop_at") else "")
+    if st["state"] == "scheduled":
+        return f"{label}: shows \"{st['message']}\" (starts {item['start_at'][:16].replace('T', ' ')})"
+    return f"{label}: shows \"{st['message']}\""
+
+
+async def _broadcast_safely(text: str) -> None:
+    try:
+        from src.services.broadcast_service import BroadcastService
+        await BroadcastService().send(text)
+    except Exception:  # noqa: BLE001 - a failed notice must never undo the admin's change
+        logger.exception("reward notice broadcast failed")
+
+
+@router.get("/api/admin/rewards/overrides")
+async def rewards_overrides(admin_id: str = Depends(require_admin_dep)):
+    from src.core.db import get_pool
+    rows = await (await get_pool()).fetch(
+        "SELECT o.player_id, o.note, o.created_by, o.created_at, p.display_name FROM reward_player_overrides o "
+        "LEFT JOIN players p ON p.id = o.player_id ORDER BY o.created_at DESC LIMIT 200")
+    return {"items": [{"player_id": r["player_id"], "name": r["display_name"], "note": r["note"], "by": r["created_by"], "at": r["created_at"].isoformat()} for r in rows]}
+
+
+@router.post("/api/admin/rewards/overrides")
+async def rewards_override_add(request: Request, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
+    """Block one player from every reward (claims, streaks, missions...). Remove with DELETE."""
+    from src.core.db import get_pool
+    svc = get_control_service()
+    await svc.require(admin_id, "rewards.manage")
+    pid = str(payload.get("player_id") or "").strip()
+    pool = await get_pool()
+    if not pid or not await pool.fetchval("SELECT 1 FROM players WHERE id = $1", pid):
+        raise HTTPException(status_code=404, detail="Player not found (use the id like tg_123456789)")
+    note = str(payload.get("note") or "").strip()[:200]
+    await pool.execute("INSERT INTO reward_player_overrides (player_id, note, created_by) VALUES ($1,$2,$3) "
+                       "ON CONFLICT (player_id) DO UPDATE SET note = EXCLUDED.note, created_by = EXCLUDED.created_by", pid, note, str(admin_id))
+    await svc.audit(admin_id, "rewards.override_add", target_type="player", target_id=pid, ip=client_ip(request), summary=f"Blocked {pid} from all rewards" + (f": {note}" if note else ""))
+    return await rewards_overrides(admin_id=admin_id)
+
+
+@router.delete("/api/admin/rewards/overrides/{player_id}")
+async def rewards_override_remove(player_id: str, request: Request, admin_id: str = Depends(require_admin_dep)):
+    from src.core.db import get_pool
+    svc = get_control_service()
+    await svc.require(admin_id, "rewards.manage")
+    await (await get_pool()).execute("DELETE FROM reward_player_overrides WHERE player_id = $1", player_id)
+    await svc.audit(admin_id, "rewards.override_remove", target_type="player", target_id=player_id, ip=client_ip(request), summary=f"Unblocked {player_id} from rewards")
+    return await rewards_overrides(admin_id=admin_id)
+
+
+@router.post("/api/admin/rewards/grant")
+async def rewards_manual_grant(request: Request, payload: dict = Body(...), admin_id: str = Depends(require_admin_dep)):
+    """Give one player a one-off bonus credit (bonus balance: playable, not withdrawable)."""
+    from src.api.dependencies import get_wallet_service
+    from src.core.db import get_pool
+    svc = get_control_service()
+    await svc.require(admin_id, "rewards.manage")
+    pid = str(payload.get("player_id") or "").strip()
+    try:
+        amount = int(payload.get("amount_etb"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Enter the amount in ETB")
+    note = str(payload.get("note") or "").strip()[:200]
+    if not 1 <= amount <= 10_000:
+        raise HTTPException(status_code=400, detail="Amount must be between 1 and 10,000 ETB")
+    if not note:
+        raise HTTPException(status_code=400, detail="Add a short reason - it is saved in the audit log")
+    if not pid or not await (await get_pool()).fetchval("SELECT 1 FROM players WHERE id = $1", pid):
+        raise HTTPException(status_code=404, detail="Player not found (use the id like tg_123456789)")
+    await get_wallet_service().credit_engagement_bonus(pid, amount, "admin_reward", f"Admin bonus: {note}")
+    await svc.audit(admin_id, "rewards.manual_grant", target_type="player", target_id=pid, ip=client_ip(request), summary=f"Granted {amount} ETB bonus to {pid}: {note}")
+    return {"ok": True, "player_id": pid, "amount_etb": amount}

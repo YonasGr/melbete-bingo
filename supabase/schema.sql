@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS game_rooms (
     prize_pool_bonus      INTEGER NOT NULL DEFAULT 0,
     taken_cartelas        JSONB NOT NULL DEFAULT '[]'::jsonb,
     min_players_to_start  INTEGER NOT NULL DEFAULT 1,
-    min_cartelas_to_start INTEGER NOT NULL DEFAULT 3 CHECK (min_cartelas_to_start >= 1),
+    min_cartelas_to_start INTEGER NOT NULL DEFAULT 4 CHECK (min_cartelas_to_start >= 1),
     countdown_seconds     INTEGER NOT NULL DEFAULT 30,
     cartela_min           INTEGER NOT NULL DEFAULT 1,
     cartela_max           INTEGER NOT NULL DEFAULT 500,
@@ -205,7 +205,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
     max_referrals_per_user          INTEGER NOT NULL DEFAULT 3,
     cards_per_player                INTEGER NOT NULL DEFAULT 4,
     min_players_to_start            INTEGER NOT NULL DEFAULT 5 CHECK (min_players_to_start >= 2),
-    min_cartelas_to_start           INTEGER NOT NULL DEFAULT 3 CHECK (min_cartelas_to_start >= 1),
+    min_cartelas_to_start           INTEGER NOT NULL DEFAULT 4 CHECK (min_cartelas_to_start >= 1),
     cartela_min                     INTEGER NOT NULL DEFAULT 1,
     cartela_max                     INTEGER NOT NULL DEFAULT 500,
     game_inactivity_timeout_minutes INTEGER NOT NULL DEFAULT 0,
@@ -768,3 +768,10 @@ CREATE TRIGGER trg_admin_audit_no_truncate
 
 -- Index for TransactionRepository.list_for_export() / daily_money_summary()
 CREATE INDEX IF NOT EXISTS idx_transactions_type_created ON transactions (type, created_at DESC);
+-- Admin "block this player from all rewards" list (Rewards tab). Idempotent.
+CREATE TABLE IF NOT EXISTS reward_player_overrides (
+  player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+  note       TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

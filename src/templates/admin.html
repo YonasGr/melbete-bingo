@@ -6,6 +6,7 @@
   <title>Melbete Bingo — Admin</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/css/admin.css?v={{ APP_VERSION }}">
+<link rel="stylesheet" href="/static/css/melbete-admin-rewards.css?v={{ APP_VERSION }}">
   <link rel="stylesheet" href="/static/css/melbete-fonts.css?v={{ APP_VERSION }}">
   <link rel="stylesheet" href="/static/css/melbete-admin-theme.css?v={{ APP_VERSION }}">
   <link rel="stylesheet" href="/static/css/melbete-admin-cosmic.css?v={{ APP_VERSION }}">
@@ -26,7 +27,7 @@
         <div class="nav-cluster"><span class="nav-heading">Workspace</span><button class="admin-nav-item active" data-tab="dashboard"><i>⌂</i>Overview</button></div>
         <div class="nav-cluster"><span class="nav-heading">Operations</span><button class="admin-nav-item" data-tab="deposits"><i>↓</i>Deposits</button><button class="admin-nav-item" data-tab="withdrawals"><i>↑</i>Withdrawals</button><button class="admin-nav-item" data-tab="reconciliation"><i>≋</i>Reconciliation</button><button class="admin-nav-item" data-tab="games"><i>◆</i>Games</button><button class="admin-nav-item" data-tab="users"><i>◎</i>Players</button><button class="admin-nav-item super-only" data-tab="agents"><i>⚑</i>Agents</button><button class="admin-nav-item super-only" data-tab="leaderboard"><i>★</i>Leaderboard</button></div>
         <div class="nav-cluster"><span class="nav-heading">Insights</span><button class="admin-nav-item" data-tab="economy"><i>▥</i>Economy</button><button class="admin-nav-item" data-tab="referrals"><i>◇</i>Referrals</button><button class="admin-nav-item super-only hidden" data-tab="bonuses"><i>✚</i>Bonuses</button></div>
-        <div class="nav-cluster"><span class="nav-heading">Platform</span><button class="admin-nav-item" data-tab="control"><i>✦</i>Control Center</button><button class="admin-nav-item" data-tab="broadcast"><i>◁</i>Broadcast</button><button class="admin-nav-item" data-tab="payments"><i>▰</i>Payment methods</button><button class="admin-nav-item super-only" data-tab="settings"><i>⚙</i>Configuration</button><button class="admin-nav-item super-only" data-tab="admins"><i>♢</i>Admin access</button></div>
+        <div class="nav-cluster"><span class="nav-heading">Platform</span><button class="admin-nav-item" data-tab="control"><i>✦</i>Control Center</button><button class="admin-nav-item" data-tab="rewards"><i>✺</i>Rewards</button><button class="admin-nav-item" data-tab="broadcast"><i>◁</i>Broadcast</button><button class="admin-nav-item" data-tab="payments"><i>▰</i>Payment methods</button><button class="admin-nav-item super-only" data-tab="settings"><i>⚙</i>Configuration</button><button class="admin-nav-item super-only" data-tab="admins"><i>♢</i>Admin access</button></div>
       </nav>
       <div class="command-account"><span class="admin-avatar">A</span><div><strong>Administrator</strong><span id="sidebar-role">Secure session</span></div><button id="sidebar-logout-btn" aria-label="Log out" title="Log out">↪</button></div>
     </aside>
@@ -225,6 +226,10 @@
           <header class="page-heading"><div><h2>Admin access</h2><p>Review privileged accounts and grant access deliberately.</p></div></header><div class="split-workspace"><div><div id="super-admin-panel"></div><article class="work-panel"><div class="panel-heading"><div><h3>Current administrators</h3><p>Accounts with panel access</p></div></div><div id="admins-list" class="record-list"></div></article></div><aside class="work-panel editor-panel"><div class="panel-heading"><div><h3>Add an administrator</h3><p>The Telegram account will receive operational access</p></div></div><form id="add-admin-form" class="admin-form"><div class="field"><label for="new-admin-id">Telegram numeric ID</label><input id="new-admin-id" required inputmode="numeric" placeholder="e.g. 12345678"><p class="field-help">Confirm the ID with the person before granting access.</p></div><button class="primary-btn" type="submit">Add administrator</button></form></aside></div>
         </section>
 
+        <section id="tab-rewards" class="tab-panel">
+          <header class="page-heading"><div><h2>Rewards control</h2><p>Start, stop and schedule every promotion on its own. Changes apply instantly and are logged; use Undo in the history to revert.</p></div></header>
+          <div id="rewards-root"><p class="cc-note">Loading…</p></div>
+        </section>
         <section id="tab-control" class="tab-panel">
           <header class="page-heading"><div><h2>Control Center</h2><p>Change games, money rules, content and switches as a draft, review it, then publish.</p></div></header>
           <div id="cc-root"><p class="cc-note">Loading…</p></div>
@@ -247,7 +252,7 @@
       </main>
 
       <nav class="bottom-nav" aria-label="Primary mobile navigation"><button class="bottom-nav-item active" data-tab="dashboard"><span>⌂</span>Today</button><button class="bottom-nav-item" data-tab="deposits"><span>↓</span>Deposits</button><button class="bottom-nav-item" data-tab="withdrawals"><span>↑</span>Withdraw</button><button class="bottom-nav-item" data-tab="games"><span>◆</span>Games</button><button class="bottom-nav-item" id="more-nav-btn"><span>⋯</span>More</button></nav>
-      <div id="sheet-overlay" class="sheet-overlay"></div><aside id="more-sheet" class="more-sheet"><div class="sheet-grabber"></div><h2>More tools</h2><div class="sheet-grid"><button class="sheet-tile" data-tab="control"><span>✦</span>Control Center</button><button class="sheet-tile" data-tab="users"><span>◎</span>Players</button><button class="sheet-tile super-only" data-tab="agents"><span>⚑</span>Agents</button><button class="sheet-tile super-only" data-tab="leaderboard"><span>★</span>Leaderboard</button><button class="sheet-tile" data-tab="reconciliation"><span>≋</span>Reconciliation</button><button class="sheet-tile" data-tab="economy"><span>▥</span>Economy</button><button class="sheet-tile" data-tab="referrals"><span>◇</span>Referrals</button><button class="sheet-tile super-only hidden" data-tab="bonuses"><span>✚</span>Bonuses</button><button class="sheet-tile" data-tab="broadcast"><span>◁</span>Broadcast</button><button class="sheet-tile" data-tab="payments"><span>▰</span>Payments</button><button class="sheet-tile super-only" data-tab="settings"><span>⚙</span>Configuration</button><button class="sheet-tile super-only" data-tab="admins"><span>♢</span>Admin access</button></div><button id="logout-btn" class="sheet-logout">Log out</button></aside>
+      <div id="sheet-overlay" class="sheet-overlay"></div><aside id="more-sheet" class="more-sheet"><div class="sheet-grabber"></div><h2>More tools</h2><div class="sheet-grid"><button class="sheet-tile" data-tab="control"><span>✦</span>Control Center</button><button class="sheet-tile" data-tab="rewards"><span>✺</span>Rewards</button><button class="sheet-tile" data-tab="users"><span>◎</span>Players</button><button class="sheet-tile super-only" data-tab="agents"><span>⚑</span>Agents</button><button class="sheet-tile super-only" data-tab="leaderboard"><span>★</span>Leaderboard</button><button class="sheet-tile" data-tab="reconciliation"><span>≋</span>Reconciliation</button><button class="sheet-tile" data-tab="economy"><span>▥</span>Economy</button><button class="sheet-tile" data-tab="referrals"><span>◇</span>Referrals</button><button class="sheet-tile super-only hidden" data-tab="bonuses"><span>✚</span>Bonuses</button><button class="sheet-tile" data-tab="broadcast"><span>◁</span>Broadcast</button><button class="sheet-tile" data-tab="payments"><span>▰</span>Payments</button><button class="sheet-tile super-only" data-tab="settings"><span>⚙</span>Configuration</button><button class="sheet-tile super-only" data-tab="admins"><span>♢</span>Admin access</button></div><button id="logout-btn" class="sheet-logout">Log out</button></aside>
     </div>
   </div>
 
@@ -256,6 +261,7 @@
 </div>
 <script src="/static/js/admin.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/admin-control.js?v={{ APP_VERSION }}"></script>
+<script src="/static/js/admin-rewards.js?v={{ APP_VERSION }}"></script>
 <script src="/static/js/admin-live.js?v={{ APP_VERSION }}"></script>
 </body>
 </html>

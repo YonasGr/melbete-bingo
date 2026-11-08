@@ -51,6 +51,10 @@ class MissionService:
     async def claim(self, player_id: str, rounds: int) -> dict:
         from src.api.dependencies import get_wallet_service
 
+        from src.services.control_service import reward_blocked
+        paused = await reward_blocked("missions", player_id=player_id)
+        if paused:
+            raise MissionError(paused, 403)
         defs = self.definitions()
         if rounds not in defs:
             raise MissionError("Unknown mission.")

@@ -343,7 +343,19 @@ function onRandomCartela() {
     pool.push([n, btn]);
   });
   if (!pool.length) { toast("No free cartela to pick here", "error"); return; }
-  const [n, btn] = pool[Math.floor(Math.random() * pool.length)];
+  const want = window.MelbeteFlow ? window.MelbeteFlow.choices() : 3;   // admin: Experience > Dice offers (0 = instant pick)
+  const copy = pool.slice(), picks = [];
+  while (picks.length < Math.max(1, want) && copy.length) picks.push(copy.splice(Math.floor(Math.random() * copy.length), 1)[0]);
+  if (window.MelbeteFlow && want > 0) {
+    window.MelbeteFlow.chooseRandom(picks.map((p) => p[0]), (num) => {
+      const b = cartelaGridButtons && cartelaGridButtons.get(num);
+      if (!b) return;
+      b.scrollIntoView({ block: "center", behavior: "smooth" });
+      onPickCartela(num, b);
+    }, onRandomCartela);
+    return;
+  }
+  const [n, btn] = picks[0];
   btn.scrollIntoView({ block: "center", behavior: "smooth" });
   onPickCartela(n, btn);
 }
@@ -404,7 +416,7 @@ function setLobbyLocked(locked) {
 }
 
 function lobbyStatusText(room) {
-  const min = room?.min_cartelas_to_start || 2;
+  const min = room?.min_cartelas_to_start || 4;
   const taken = room?.taken_cartelas?.length || 0;
   if (room?.countdown_started_at) return `${taken} cartela(s) reserved - the round starts when the countdown ends.`;
   const need = Math.max(min - taken, 0);
@@ -537,14 +549,15 @@ function openCartelaSheet(card) {
   holder.innerHTML = "";
   holder.appendChild(buildCardElement(card, { compact: true, showRelease: false }));
   note.textContent = `Cartela ${card.cartela_number} is reserved for you (${state.myCards.length}/${state.cardsPerPlayer}). ${stake} ETB is charged only when the round starts.`;
-  cancelBtn.textContent = "Close";
-  confirmBtn.textContent = "Remove this cartela";
-  confirmBtn.disabled = state.lobbyLocked;
-  confirmBtn.onclick = async () => {
+  confirmBtn.textContent = "\u2713 Keep this cartela";
+  confirmBtn.disabled = false;
+  confirmBtn.onclick = close;
+  cancelBtn.textContent = "Remove";
+  cancelBtn.disabled = state.lobbyLocked;
+  cancelBtn.onclick = async () => {
     close();
     await onReleaseCartela(card.id);
   };
-  cancelBtn.onclick = close;
   document.getElementById("cartela-sheet-backdrop").onclick = close;
   document.addEventListener("keydown", onKey);
   sheet.classList.remove("hidden");
@@ -1373,7 +1386,8 @@ function prepareRematchButton() {
   if (!btn) return;
   const numbers = state.myCards.map((c) => c.cartela_number).sort((a, b) => a - b);
   state.rematchNumbers = numbers;
-  btn.classList.toggle("hidden", numbers.length === 0);
+  const keep = !window.MelbeteFlow || window.MelbeteFlow.keepRematch();   // admin: Experience > Play again keeps cartelas
+  btn.classList.toggle("hidden", numbers.length === 0 || !keep);
   btn.textContent = numbers.length ? `Play again (cartela ${numbers.map((n) => `#${n}`).join(", ")})` : "Play again";
 }
 

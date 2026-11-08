@@ -198,3 +198,8 @@ input::placeholder, textarea::placeholder { color: #8F8A7E; opacity: 1; }
 .cx-home-note { margin: .5rem .2rem 0; color: #B3AEA2; font-size: .85rem; }
 .cx-off { opacity: .45; filter: grayscale(.6); }
 @media (prefers-reduced-motion: reduce) { .cx-maint-card, .cx-announce, .cx-banner { animation: none; } }
+
+/* Bonus Center reward status (paused / starts soon / ends in), set by melbete-control.js */
+.cx-reward-status{display:grid;gap:.4rem;margin:.5rem 0}
+.cx-reward-status.hidden{display:none}
+.cx-reward-chip{padding:.45rem .7rem;border-radius:12px;border:1px solid var(--cx-line);background:var(--cx-glass);font-size:.8rem;color:#FFE08A}

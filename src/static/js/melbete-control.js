@@ -27,6 +27,9 @@
 
   function apply(cfg) {
     cxTexts = cfg.texts || {}; cxPromos = cfg.promotions || [];
+    window.cxExperience = cfg.experience || {};
+    document.dispatchEvent(new Event("melbete:experience"));
+    rewardStatus(cfg.rewards || {});
     if (window.paintCashback) window.paintCashback();
     document.dispatchEvent(new Event("melbete:texts"));
     maintenance(cfg.maintenance);
@@ -34,6 +37,24 @@
     banner(cfg.banner, cfg.texts && cfg.texts.home_note);
     texts(cfg.texts || {});
     flags(cfg);
+  }
+
+  /* ---- Bonus Center: which rewards are paused, starting soon or ending (admin Rewards tab) ---- */
+  function rewardStatus(rw) {
+    const host = $("bonus-center-rewards");
+    if (!host) return;
+    let strip = $("cx-reward-status");
+    if (!strip) { strip = el("div", "cx-reward-status"); strip.id = "cx-reward-status"; host.before(strip); }
+    strip.textContent = "";
+    const left = (iso) => { const m = Math.round((Date.parse(iso) - Date.now()) / 60000); return m <= 0 ? "" : m >= 1440 ? `${Math.round(m / 1440)}d` : m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
+    for (const r of Object.values(rw)) {
+      let t = "";
+      if (r.state === "on" && r.ends_at && left(r.ends_at)) t = `⏳ ${r.label} ends in ${left(r.ends_at)}`;
+      else if (r.state === "scheduled") t = `🕒 ${r.label} starts soon`;
+      else if (r.state !== "on") t = `⏸ ${r.message || r.label + " is paused"}`;
+      if (t) strip.appendChild(el("div", "cx-reward-chip", t));
+    }
+    strip.classList.toggle("hidden", !strip.childElementCount);
   }
 
   /* ---- maintenance: full-screen, lifts itself when the admin turns it off ---- */
