@@ -284,7 +284,10 @@
     </div>
     <div class="profile-drawer-footer">
       <span class="pdf-label" data-i18n="lang_switch">Change language</span>
-      <button id="lang-toggle-btn" class="lang-toggle" type="button" aria-label="Change language">EN</button>
+      <div id="lang-seg" class="lang-seg" role="radiogroup" aria-label="Change language">
+        <button type="button" class="lang-seg-opt" role="radio" data-lang="en" aria-checked="false">EN</button>
+        <button type="button" class="lang-seg-opt" role="radio" data-lang="am" aria-checked="false" lang="am">አማ</button>
+      </div>
     </div>
   </aside>
 

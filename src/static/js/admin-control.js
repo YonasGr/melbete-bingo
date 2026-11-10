@@ -108,7 +108,7 @@
       ${can("control.edit") && s.has_draft && !cc.dirty ? `<button class="secondary-btn" data-act="discard">Discard</button>` : ""}
       ${can("control.publish") ? `<button class="primary-btn" data-act="publish" ${s.has_draft && !cc.dirty ? "" : "disabled"}>Publish</button>` : ""}
       ${can("control.publish") && s.can_rollback ? `<button class="secondary-btn" data-act="rollback">Undo last publish</button>` : ""}
-    </div></div>${can("control.edit") ? "" : `<p class="cc-note">Your role can view these controls but not change them.</p>`}`;
+    </div></div>${can("control.edit") ? "" : `<p class="cc-note">Your role can view these controls but not change them.</p>`}${s.has_draft && !can("control.publish") ? `<p class="cc-note">Your role can't publish. Ask a Super Admin or Manager to publish these changes.</p>` : ""}${cc.dirty && can("control.publish") ? `<p class="cc-note">Save your draft first, then tap Publish.</p>` : ""}`;
   }
   function renderSection() {
     const body = $("cc-body");
@@ -431,6 +431,22 @@
     const list = (a) => [...new Set((a || []).map((k) => lobbyNames[k] || k))].join(", ");
     toast(`Published.${sync && sync.applied && sync.applied.length ? ` Applied to the open lobby: ${list(sync.applied)}.` : ""}${sync && sync.deferred && sync.deferred.length ? ` From the next round: ${list(sync.deferred)}.` : ""}`, "success"); render();
   }
+
+  // Used by the dashboard's "unpublished changes" banner: refresh the draft, then run the normal
+  // review-and-publish dialog. Returns true when the publish went through.
+  window.publishControlDraft = async () => {
+    try {
+      if (cc.dirty) { toast("You have unsaved edits in Control Center. Save the draft first.", "error"); goToTab("control"); return false; }
+      adopt(await api("/api/admin/control"));
+      if (!can("control.publish")) { toast("Your role can't publish. Ask a Super Admin or Manager.", "error"); return false; }
+      if (!cc.snap.has_draft || !cc.snap.changes.length) { toast("Nothing to publish.", "success"); return false; }
+      await publish();
+      return true;
+    } catch (err) {
+      toast((err && err.message) || "Could not publish", "error");
+      return false;
+    }
+  };
 
   document.addEventListener("click", async (e) => {
     const root = $("cc-root"), drawer = $("cc-player-drawer");

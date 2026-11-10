@@ -19,7 +19,7 @@ Copy `.env.example` to `.env` for local development, or set the values as encryp
 - `TELEGRAM_BOT_TOKEN`: token from BotFather.
 - `SECRET_KEY`: a newly generated, long random secret.
 - `PUBLIC_BASE_URL`: the deployed HTTPS URL.
-- `SUPER_ADMIN_TELEGRAM_ID`: your Telegram numeric user ID.
+- `SUPER_ADMIN_TELEGRAM_ID`: your Telegram numeric user ID. Several owners are allowed, separated by commas (`111111111,222222222`).
 - `ADMIN_TOTP_SECRETS`: set up the required admin second-factor secret before using the admin panel.
 - `APP_ENV=production` and `DEBUG=False` in production.
 

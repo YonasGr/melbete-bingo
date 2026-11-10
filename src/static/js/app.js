@@ -361,7 +361,7 @@ function onRandomCartela() {
 }
 
 function renderCartelaGrid() {
-  const maxNum = state.room?.cartela_max || state.room?.number_range_max || 500;
+  const maxNum = state.room?.cartela_max || state.room?.number_range_max || 1000;
   if (!cartelaGridButtons || cartelaGridButtons.size !== maxNum) {
     buildCartelaGrid(maxNum);
   }

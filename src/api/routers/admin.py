@@ -92,6 +92,7 @@ async def admin_me(admin_id: str = Depends(require_admin_dep)):
     is_super = await admin_service.is_super_admin(admin_id)
     return {
         "is_admin": True,
+        "telegram_id": str(admin_id),
         "is_super_admin": is_super,
         "role": "super" if is_super else (admin.role if admin else "admin"),
         "permissions": sorted(perms),
@@ -219,11 +220,18 @@ async def admin_broadcast_status(admin_id: str = Depends(require_admin_dep)):
 
 @router.get("/admins")
 async def admin_list_admins(admin_id: str = Depends(require_admin_dep)):
-    admins = await get_admin_service().list_admins()
-    return {"admins": [{
-        "telegram_id": a.telegram_id, "is_super_admin": a.is_super_admin, "added_by": a.added_by,
-        "role": "super" if a.is_super_admin else a.role, "extra_permissions": a.extra_permissions,
-    } for a in admins]}
+    from src.services import control_logic
+
+    svc = get_admin_service()
+    admins = await svc.list_admins()
+    return {
+        "admins": [{
+            "telegram_id": a.telegram_id, "is_super_admin": a.is_super_admin, "added_by": a.added_by,
+            "role": "super" if a.is_super_admin else a.role, "extra_permissions": a.extra_permissions,
+            "is_owner": svc.is_owner(a.telegram_id), "is_you": str(a.telegram_id) == str(admin_id),
+        } for a in admins],
+        "roles": [{"key": r, "label": control_logic.ROLE_LABELS.get(r, r)} for r in control_logic.ASSIGNABLE_ROLES],
+    }
 
 
 @router.post("/admins")
@@ -263,22 +271,46 @@ async def admin_set_role(telegram_id: str, request: Request, payload: dict = Bod
 
 @router.delete("/admins/{telegram_id}")
 async def admin_remove_admin(telegram_id: str, request: Request, requester: str = Depends(require_super_admin_dep)):
+    service = get_admin_service()
+    before = await service.get_admin(telegram_id)
     try:
-        await get_admin_service().remove_admin(requester, telegram_id)
+        await service.remove_admin(requester, telegram_id)
     except NotSuperAdminError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    await _audit(request, requester, "staff.remove", target_type="admin", target_id=telegram_id, summary="Removed staff access")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    was = "super admin" if before and before.is_super_admin else (before.role if before else "staff")
+    await _audit(request, requester, "staff.remove", target_type="admin", target_id=telegram_id,
+                 summary=f"Removed staff access (was {was})",
+                 before={"role": "super" if before and before.is_super_admin else (before.role if before else None)})
     return {"message": "Admin removed"}
 
 
 @router.post("/admins/promote")
 async def admin_promote_admin(request: Request, payload: dict = Body(...), requester: str = Depends(require_super_admin_dep)):
+    target = str(payload.get("telegram_id") or "").strip()
     try:
-        admin = await get_admin_service().promote_to_super_admin(requester, payload["telegram_id"])
+        admin = await get_admin_service().promote_to_super_admin(requester, target)
     except NotSuperAdminError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    await _audit(request, requester, "staff.promote", target_type="admin", target_id=str(payload["telegram_id"]), summary="Promoted to super admin")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await _audit(request, requester, "staff.promote", target_type="admin", target_id=target, summary="Promoted to super admin")
     return {"id": admin.id, "telegram_id": admin.telegram_id, "is_super_admin": admin.is_super_admin}
+
+
+@router.post("/admins/{telegram_id}/demote")
+async def admin_demote_admin(telegram_id: str, request: Request, payload: dict = Body(default={}), requester: str = Depends(require_super_admin_dep)):
+    role = (payload or {}).get("role") or "admin"
+    try:
+        admin = await get_admin_service().demote_super_admin(requester, telegram_id, role, (payload or {}).get("extra_permissions"))
+    except NotSuperAdminError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await _audit(request, requester, "staff.demote", target_type="admin", target_id=telegram_id,
+                 summary=f"Demoted from super admin to {admin.role}", before={"role": "super"}, after={"role": admin.role})
+    return {"telegram_id": admin.telegram_id, "role": admin.role, "is_super_admin": admin.is_super_admin}
 
 
 @router.get("/payment-methods")
@@ -873,7 +905,7 @@ async def admin_terminate_game(
     room_id: str,
     request: Request,
     payload: dict = Body(default={}),
-    requester: str = Depends(require_perm("games.manage")),
+    requester: str = Depends(require_super_admin_dep),
 ):
     reason = (payload or {}).get("reason") or "Terminated by admin"
     full_reason = f"admin_terminated: {reason} (by {requester})"

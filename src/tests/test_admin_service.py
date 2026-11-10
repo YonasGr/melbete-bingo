@@ -117,3 +117,108 @@ async def test_inactive_method_is_hidden_only_from_active_listing(admin_service)
     all_methods = await admin_service.list_payment_methods(active_only=False)
     assert "cbe" in {m.key for m in all_methods}
     assert sum(1 for m in all_methods if m.key == "cbe") == 1
+
+
+# --------------------------------------------------------------------------
+# Staff management: promote, demote, remove
+# --------------------------------------------------------------------------
+from src.models.schemas import AdminUser  # noqa: E402
+from src.services.admin_service import NotSuperAdminError  # noqa: E402
+
+
+async def _staff(svc, owner="1", other_super="2", regular="3", role="finance"):
+    """owner + another super admin + one regular staff member."""
+    await svc.admins.create(AdminUser(telegram_id=owner, is_super_admin=True))
+    await svc.admins.create(AdminUser(telegram_id=other_super, is_super_admin=True))
+    await svc.admins.create(AdminUser(telegram_id=regular, role=role))
+
+
+@pytest.fixture
+def owner_is_1(monkeypatch):
+    from src.services import admin_service as mod
+
+    monkeypatch.setattr(mod.env_settings, "super_admin_telegram_id", "1", raising=False)
+
+
+async def test_promote_makes_regular_admin_super(admin_service, owner_is_1):
+    await _staff(admin_service)
+    promoted = await admin_service.promote_to_super_admin("1", "3")
+    assert promoted.is_super_admin is True
+    assert await admin_service.is_super_admin("3")
+
+
+async def test_promote_rejects_non_super_requester_bad_id_and_repeat(admin_service, owner_is_1):
+    await _staff(admin_service)
+    with pytest.raises(NotSuperAdminError):
+        await admin_service.promote_to_super_admin("3", "3")
+    with pytest.raises(ValueError):
+        await admin_service.promote_to_super_admin("1", "abc")
+    with pytest.raises(ValueError):
+        await admin_service.promote_to_super_admin("1", "2")  # already super
+
+
+async def test_demote_returns_super_to_chosen_role(admin_service, owner_is_1):
+    await _staff(admin_service)
+    demoted = await admin_service.demote_super_admin("1", "2", role="support")
+    assert demoted.is_super_admin is False and demoted.role == "support"
+    assert not await admin_service.is_super_admin("2")
+
+
+async def test_demote_guards(admin_service, owner_is_1):
+    await _staff(admin_service)
+    with pytest.raises(ValueError):
+        await admin_service.demote_super_admin("2", "2")            # yourself
+    with pytest.raises(NotSuperAdminError):
+        await admin_service.demote_super_admin("2", "1")            # the owner account
+    with pytest.raises(ValueError):
+        await admin_service.demote_super_admin("1", "3")            # not a super admin
+    with pytest.raises(ValueError):
+        await admin_service.demote_super_admin("1", "2", role="super")  # not an assignable role
+    with pytest.raises(NotSuperAdminError):
+        await admin_service.demote_super_admin("3", "2")            # requester is not super
+
+
+async def test_remove_regular_and_other_super_admin(admin_service, owner_is_1):
+    await _staff(admin_service)
+    await admin_service.remove_admin("1", "3")
+    assert await admin_service.get_admin("3") is None
+    await admin_service.remove_admin("1", "2")                     # another super admin may be removed
+    assert await admin_service.get_admin("2") is None
+    assert await admin_service.is_super_admin("1")                 # the remover always remains
+
+
+async def test_remove_guards(admin_service, owner_is_1):
+    await _staff(admin_service)
+    with pytest.raises(ValueError):
+        await admin_service.remove_admin("2", "2")                  # yourself
+    with pytest.raises(NotSuperAdminError):
+        await admin_service.remove_admin("2", "1")                  # the owner account
+    with pytest.raises(ValueError):
+        await admin_service.remove_admin("1", "999")                # not on the list
+    with pytest.raises(NotSuperAdminError):
+        await admin_service.remove_admin("3", "2")                  # requester is not super
+    assert await admin_service.get_admin("1") is not None
+
+
+# --------------------------------------------------------------------------
+# SUPER_ADMIN_TELEGRAM_ID may hold several IDs ("111,222")
+# --------------------------------------------------------------------------
+async def test_bootstrap_creates_every_listed_super_admin(admin_service, monkeypatch):
+    from src.services import admin_service as mod
+
+    monkeypatch.setattr(mod.env_settings, "super_admin_telegram_id", "898505692,394684531", raising=False)
+    await admin_service.ensure_super_admin_bootstrapped()
+    assert await admin_service.is_super_admin("898505692")
+    assert await admin_service.is_super_admin("394684531")
+    assert await admin_service.get_admin("898505692,394684531") is None   # no record under the joined string
+    assert admin_service.is_owner("394684531") and admin_service.is_owner("898505692")
+    assert not admin_service.is_owner("123")
+
+
+async def test_bootstrap_ignores_non_numeric_entries(admin_service, monkeypatch):
+    from src.services import admin_service as mod
+
+    monkeypatch.setattr(mod.env_settings, "super_admin_telegram_id", "abc; 55 55,,x", raising=False)
+    await admin_service.ensure_super_admin_bootstrapped()
+    assert await admin_service.is_super_admin("55")
+    assert await admin_service.get_admin("abc") is None and await admin_service.get_admin("x") is None

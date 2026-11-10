@@ -133,3 +133,11 @@
 .qp-preview-actions { display: flex; gap: 8px; }
 .qp-preview-actions button { flex: 1; }
 .quick-picker .qp-chip.previewing, .quick-picker button.previewing { outline: 2px solid #FFC933; outline-offset: 1px; }
+
+/* ---------- Profile footer: two-option language switch (EN | አማ) ---------- */
+.lang-seg { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 999px; border: 1px solid rgb(255 201 51 / .30); background: rgb(255 201 51 / .08); flex-shrink: 0; }
+.lang-seg-opt { min-width: 52px; height: 36px; padding: 0 .85rem; border: 0; border-radius: 999px; background: transparent; color: var(--ink-muted); font: 800 .8rem/1 var(--melbete-font, inherit); letter-spacing: .02em; cursor: pointer; transition: background .2s, color .2s, transform .15s, box-shadow .2s; }
+.lang-seg-opt:active { transform: scale(.95); }
+.lang-seg-opt.active { background: var(--melbete-grad, linear-gradient(135deg, #FFC933, #F59E0B)); color: #14110A; box-shadow: 0 2px 10px rgb(255 201 51 / .35); cursor: default; }
+.lang-seg-opt:focus-visible { outline: 3px solid var(--melbete-gold, #FFC933); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .lang-seg-opt { transition: none; } }

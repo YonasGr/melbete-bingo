@@ -75,7 +75,7 @@ async def _room_summary(room, player_count: int = 0) -> dict:
         "draw_interval": room.draw_interval,
         "cards_per_player": room.cards_per_player,
         "cartela_min": getattr(room, "cartela_min", 1),
-        "cartela_max": getattr(room, "cartela_max", 500),
+        "cartela_max": getattr(room, "cartela_max", 1000),
         "players": [],
         "player_count": player_count,
     }

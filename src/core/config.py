@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     # All house-funded rewards are bonus balance (playable, never withdrawable). Promotional
     # messages respect each player's /mute opt-out and quiet hours (Ethiopia time, EAT = UTC+3).
     # "days:ETB" pairs: reward when a player has played this many days IN A ROW. Empty = off.
-    engagement_streak_rewards: str = "3:10,7:30"
+    engagement_streak_rewards: str = "30:10,70:30"  # play-streak milestones "days:ETB bonus"
     engagement_missions: str = "3:20,5:40,10:80"  # daily missions "rounds:bonus ETB"; empty disables them
     engagement_missions_daily_budget_etb: int = 5000  # hard cap on mission bonus paid per day (house protection)
     engagement_winback_days: int = 7  # a player who has not played for this many days gets a free round
@@ -130,9 +130,9 @@ class Settings(BaseSettings):
     max_withdrawal_amount: int = 10000
 
     # --- Admin / payments -----------------------------------------------
-    # Telegram numeric user ID of the ONE super admin, bootstrapped from the
-    # environment on first startup. The super admin can promote/demote other
-    # admins from the admin panel; nothing else needs an env var again.
+    # Telegram numeric user ID(s) of the owner super admin(s), bootstrapped from the
+    # environment at startup. One ID, or several separated by commas/spaces
+    # ("111,222"). Super admins can promote/demote other admins from the admin panel.
     super_admin_telegram_id: Optional[str] = None
     # One Base32 TOTP seed per administrator: "telegram_id:BASE32SEED,...".
     # This is mandatory for admin login; there is deliberately no desktop
@@ -153,6 +153,18 @@ class Settings(BaseSettings):
     # admins can edit account numbers without a redeploy; this only seeds
     # the very first run.
     payment_methods: str = "Telebirr,CBE Birr"
+
+    @property
+    def super_admin_ids(self) -> list[str]:
+        """Owner super admin IDs parsed from SUPER_ADMIN_TELEGRAM_ID (comma, semicolon or space separated).
+        Only all-digit entries count, so a typo can never become a bogus staff record."""
+        raw = (self.super_admin_telegram_id or "").replace(";", ",").replace(" ", ",")
+        out: list[str] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if part.isdigit() and part not in out:
+                out.append(part)
+        return out
 
     @property
     def admin_ids(self) -> list[int]:

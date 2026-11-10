@@ -12,6 +12,7 @@ tg?.expand();
 
 const state = {
   isSuperAdmin: false,
+  myTelegramId: "",
   perms: new Set(),
   inTelegram: !!tg?.initData,
   currentDepositFilter: "pending",
@@ -129,8 +130,10 @@ function tgCopyChip(tgId) {
 /* ===========================================================================
    Login
    =========================================================================== */
-// Terminate / start now / reset lobby / delete room: super admins, or any role holding "games.manage".
+// Start now / reset lobby / delete room: super admins, or any role holding "games.manage".
 const canManageGames = () => state.isSuperAdmin || state.perms.has("games.manage");
+// Terminating a running round (refunds every stake): super admins only.
+const canTerminateRound = () => !!state.isSuperAdmin;
 
 async function login(totpCode) {
   if (!state.inTelegram || !tg?.initData) throw new Error("The admin panel can only be opened from Telegram.");
@@ -140,6 +143,7 @@ async function login(totpCode) {
     body: JSON.stringify({ totp_code: totpCode }),
   });
   state.isSuperAdmin = me.is_super_admin;
+  state.myTelegramId = String(me.telegram_id || "");
   state.perms = new Set(me.permissions || []);
   document.getElementById("login-screen").classList.add("hidden");
   document.getElementById("admin-shell").classList.remove("hidden");
@@ -354,7 +358,7 @@ async function loadSuperAdminPanel() {
       try {
         await api("/api/admin/admins/promote", { method: "POST", body: JSON.stringify({ telegram_id: targetId }) });
         toast("Promoted to Super Admin!", "success");
-        await Promise.all([loadAdmins(), loadSuperAdminPanel()]);
+        await refreshAdminScreens();
       } catch (err) {
         toast(err.message, "error");
         btn.disabled = false;
@@ -568,7 +572,7 @@ function renderLiveGameBanner(report) {
         <div class="lg-title"><span class="pill ${report.room_state}">${report.room_state}</span> Live session</div>
         <div class="lg-meta">${report.players_in_round} cartela(s) in play · ${report.called_numbers} number(s) drawn · Pool: ${money(report.prize_pool)}</div>
       </div>
-      ${isLive && canManageGames() ? `<button class="btn-terminate" id="terminate-live-btn">⛔ Terminate round</button>` : ""}
+      ${isLive && canTerminateRound() ? `<button class="btn-terminate" id="terminate-live-btn">⛔ Terminate round</button>` : ""}
     </div>
   `;
   document.getElementById("terminate-live-btn")?.addEventListener("click", (e) => terminateGame(report.room_id, e.currentTarget));
@@ -681,7 +685,7 @@ async function loadGames(filter = state.currentGameFilter) {
         `<div class="winner-line">🏆 <strong>${escapeHtml(w.player_name)}</strong> — Cartela #${w.cartela_number} — ${money(w.payout)}</div>`
       ).join("");
       let actionsHtml = "";
-      if (g.state === "running" && !g.terminated && canManageGames()) {
+      if (g.state === "running" && !g.terminated && canTerminateRound()) {
         actionsHtml = `<div class="rc-actions"><button class="btn-terminate" data-action="terminate-game" data-id="${g.id}">⛔ Terminate round</button></div>`;
       } else if (g.state === "waiting" && canManageGames()) {
         actionsHtml = `<div class="rc-actions">` +
@@ -1032,26 +1036,100 @@ document.getElementById("payment-method-form")?.addEventListener("submit", async
 /* ===========================================================================
    Admins
    =========================================================================== */
+let _adminRoles = [];
+
+function adminRoleLabel(a) {
+  if (a.is_super_admin) return "Super Admin";
+  const r = _adminRoles.find((x) => x.key === a.role);
+  return r ? r.label : (a.role || "Admin");
+}
+
+function adminRoleOptions(selected) {
+  return _adminRoles.map((r) => `<option value="${escapeHtml(r.key)}"${r.key === selected ? " selected" : ""}>${escapeHtml(r.label)}</option>`).join("");
+}
+
 async function loadAdmins() {
-  const { admins } = await api("/api/admin/admins");
+  const { admins, roles } = await api("/api/admin/admins");
+  _adminRoles = roles || [];
+  const addRole = document.getElementById("new-admin-role");
+  if (addRole && !addRole.options.length) addRole.innerHTML = adminRoleOptions("admin");
   const list = document.getElementById("admins-list");
   if (!admins.length) { list.innerHTML = emptyState("🛡️", "No admins yet."); return; }
-  list.innerHTML = admins.map((a) => recordCard({
-    id: a.telegram_id,
-    title: `${escapeHtml(a.telegram_id)} ${a.is_super_admin ? "👑" : ""}`,
-    meta: [a.is_super_admin ? "Super Admin" : "Admin", a.added_by ? `Added by ${escapeHtml(a.added_by)}` : ""],
-    actionsHtml: a.is_super_admin ? "" : `<div class="rc-actions"><button class="btn btn-delete" data-action="remove-admin" data-id="${a.telegram_id}">Remove</button></div>`,
-  })).join("");
+  list.innerHTML = admins.map((a) => {
+    const badges = [a.is_you ? "You" : "", a.is_owner ? "Owner" : ""].filter(Boolean).map((t) => ` <span class="pill">${t}</span>`).join("");
+    let actions = "";
+    if (state.isSuperAdmin && !a.is_you && !a.is_owner) {
+      if (a.is_super_admin) {
+        actions = `<div class="rc-actions">
+          <select data-role-select aria-label="Role after demotion">${adminRoleOptions("admin")}</select>
+          <button class="btn btn-reject" data-action="demote-admin" data-id="${escapeHtml(a.telegram_id)}">Demote</button>
+          <button class="btn btn-delete" data-action="remove-admin" data-id="${escapeHtml(a.telegram_id)}">Remove</button>
+        </div>`;
+      } else {
+        actions = `<div class="rc-actions">
+          <select data-role-select aria-label="Role">${adminRoleOptions(a.role)}</select>
+          <button class="btn" data-action="set-admin-role" data-id="${escapeHtml(a.telegram_id)}">Save role</button>
+          <button class="btn btn-approve" data-action="promote-admin" data-id="${escapeHtml(a.telegram_id)}">Make super admin</button>
+          <button class="btn btn-delete" data-action="remove-admin" data-id="${escapeHtml(a.telegram_id)}">Remove</button>
+        </div>`;
+      }
+    }
+    return recordCard({
+      id: a.telegram_id,
+      title: `${escapeHtml(a.telegram_id)} ${a.is_super_admin ? "👑" : ""}${badges}`,
+      meta: [adminRoleLabel(a), a.added_by ? `Added by ${escapeHtml(a.added_by)}` : ""],
+      actionsHtml: actions,
+    });
+  }).join("");
+}
+
+async function refreshAdminScreens() {
+  await Promise.all([loadAdmins(), loadSuperAdminPanel()]);
+}
+
+async function runAdminAction(btn, fn) {
+  btn.disabled = true;
+  try { await fn(); } catch (err) { toast(err.message, "error"); } finally { btn.disabled = false; }
+}
+
+async function adminStaffAction(action, id, btn) {
+  const card = btn.closest(".record-card");
+  const role = card?.querySelector("select[data-role-select]")?.value || "admin";
+  if (action === "promote-admin") {
+    if (!window.confirm(`Make ${id} a super admin? They will be able to manage staff, settings and money.`)) return;
+    await runAdminAction(btn, async () => {
+      await api("/api/admin/admins/promote", { method: "POST", body: JSON.stringify({ telegram_id: id }) });
+      toast("Promoted to Super Admin", "success"); await refreshAdminScreens();
+    });
+  } else if (action === "demote-admin") {
+    if (!window.confirm(`Demote ${id} from super admin to a regular role? They keep panel access with that role.`)) return;
+    await runAdminAction(btn, async () => {
+      await api(`/api/admin/admins/${encodeURIComponent(id)}/demote`, { method: "POST", body: JSON.stringify({ role }) });
+      toast("Demoted", "success"); await refreshAdminScreens();
+    });
+  } else if (action === "set-admin-role") {
+    await runAdminAction(btn, async () => {
+      await api(`/api/admin/admins/${encodeURIComponent(id)}/role`, { method: "PUT", body: JSON.stringify({ role }) });
+      toast("Role updated", "success"); await refreshAdminScreens();
+    });
+  } else if (action === "remove-admin") {
+    if (!window.confirm(`Remove ${id} from the staff? They lose panel access immediately.`)) return;
+    await runAdminAction(btn, async () => {
+      await api(`/api/admin/admins/${encodeURIComponent(id)}`, { method: "DELETE" });
+      toast("Admin removed", "success"); await refreshAdminScreens();
+    });
+  }
 }
 
 document.getElementById("add-admin-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const id = document.getElementById("new-admin-id").value.trim();
+  const role = document.getElementById("new-admin-role")?.value || "admin";
   try {
-    await api("/api/admin/admins", { method: "POST", body: JSON.stringify({ telegram_id: id }) });
+    await api("/api/admin/admins", { method: "POST", body: JSON.stringify({ telegram_id: id, role }) });
     toast("Admin added", "success");
     e.target.reset();
-    await loadAdmins();
+    await refreshAdminScreens();
   } catch (err) {
     toast(err.message, "error");
   }
@@ -2025,6 +2103,7 @@ document.addEventListener("click", async (e) => {
   if (action === "load-user-economy") { loadUserEconomy(id); return; }
   if (action === "manage-user") { const u = findUserById(id); if (u) openUserManageModal(u); return; }
   if (action === "terminate-game") { terminateGame(id, btn); return; }
+  if (["promote-admin", "demote-admin", "set-admin-role", "remove-admin"].includes(action)) { adminStaffAction(action, id, btn); return; }
   if (action === "delete-game") { deleteGame(id, btn); return; }
   if (action === "reset-lobby") { resetLobby(id, btn); return; }
   if (action === "force-start-game") { forceStartGame(id, btn); return; }
@@ -2093,7 +2172,6 @@ document.addEventListener("click", async (e) => {
     }
     if (action === "agent-suspend")  { await api(`/api/admin/agents/${id}/suspend`, { method: "POST", body: "{}" }); toast("Agent suspended", "success"); await loadAgents(); }
     if (action === "agent-activate") { await api(`/api/admin/agents/${id}/activate`, { method: "POST", body: "{}" }); toast("Agent activated", "success"); await loadAgents(); }
-    if (action === "remove-admin")  { await api(`/api/admin/admins/${id}`, { method: "DELETE" }); await loadAdmins(); toast("Admin removed", "success"); }
   } catch (err) {
     if (actionsDiv) actionsDiv.querySelectorAll("button").forEach((b) => { b.disabled = false; });
     toast(err.message, "error");

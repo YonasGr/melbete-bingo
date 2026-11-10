@@ -54,19 +54,17 @@ class AdminService:
     # ------------------------------------------------------------------
 
     async def ensure_super_admin_bootstrapped(self) -> None:
-        """Called once at startup. If SUPER_ADMIN_TELEGRAM_ID is set and
-        that id has no admin record yet, create one as super admin. Safe
-        to call every startup - it's a no-op once bootstrapped."""
-        telegram_id = env_settings.super_admin_telegram_id
-        if not telegram_id:
-            return
-        existing = await self.admins.get_by_telegram_id(str(telegram_id))
-        if existing:
-            if not existing.is_super_admin:
-                existing.is_super_admin = True
-                await self.admins.create(existing)
-            return
-        await self.admins.create(AdminUser(telegram_id=str(telegram_id), is_super_admin=True))
+        """Called once at startup. Every ID in SUPER_ADMIN_TELEGRAM_ID (one, or several separated by commas)
+        becomes a super admin: created if missing, upgraded if it exists as a lower role. Safe to call at
+        every startup."""
+        for telegram_id in env_settings.super_admin_ids:
+            existing = await self.admins.get_by_telegram_id(telegram_id)
+            if existing:
+                if not existing.is_super_admin:
+                    existing.is_super_admin = True
+                    await self.admins.create(existing)
+                continue
+            await self.admins.create(AdminUser(telegram_id=telegram_id, is_super_admin=True))
 
     async def get_admin(self, telegram_id: str) -> Optional[AdminUser]:
         return await self.admins.get_by_telegram_id(str(telegram_id))
@@ -135,26 +133,66 @@ class AdminService:
         target.extra_permissions = control_logic.validate_extra_permissions(extra_permissions)
         return await self.admins.create(target)
 
+    @staticmethod
+    def is_owner(telegram_id: str) -> bool:
+        """The account named in SUPER_ADMIN_TELEGRAM_ID. It is re-created as super admin at every
+        startup, so removing or demoting it here would silently undo itself."""
+        return str(telegram_id) in env_settings.super_admin_ids
+
     async def remove_admin(self, requester_telegram_id: str, target_telegram_id: str) -> None:
+        """Remove someone's staff access (super admin only). A super admin can be removed by another
+        super admin; nobody can remove themselves or the owner account."""
         if not await self.is_super_admin(requester_telegram_id):
-            raise NotSuperAdminError("Only the super admin can remove admins")
-        target = await self.get_admin(target_telegram_id)
-        if target and target.is_super_admin:
-            raise NotSuperAdminError("The super admin cannot be removed")
-        await self.admins.delete(str(target_telegram_id))
+            raise NotSuperAdminError("Only a super admin can remove admins")
+        target_id = str(target_telegram_id)
+        if target_id == str(requester_telegram_id):
+            raise ValueError("You cannot remove yourself. Ask another super admin to do it.")
+        if self.is_owner(target_id):
+            raise NotSuperAdminError("This is the owner account (SUPER_ADMIN_TELEGRAM_ID) and cannot be removed here")
+        target = await self.get_admin(target_id)
+        if target is None:
+            raise ValueError("That person is not on the staff list")
+        await self.admins.delete(target_id)
 
     async def promote_to_super_admin(self, requester_telegram_id: str, target_telegram_id: str) -> AdminUser:
-        """Promote an existing admin to super admin. Only the current super
-        admin can do this. This is how super adminship is transferred or
-        expanded to multiple super admins."""
+        """Promote an existing admin to super admin. Only a super admin can do this."""
         if not await self.is_super_admin(requester_telegram_id):
-            raise NotSuperAdminError("Only the super admin can promote other admins")
-        admin = await self.get_admin(target_telegram_id)
+            raise NotSuperAdminError("Only a super admin can promote other admins")
+        target_id = str(target_telegram_id or "").strip()
+        if not target_id.isdigit():
+            raise ValueError("Enter the person's numeric Telegram ID")
+        admin = await self.get_admin(target_id)
+        if admin and admin.is_super_admin:
+            raise ValueError("That person is already a super admin")
         if not admin:
             # Auto-create admin record if they don't have one yet
-            admin = AdminUser(telegram_id=str(target_telegram_id), added_by=str(requester_telegram_id))
+            admin = AdminUser(telegram_id=target_id, added_by=str(requester_telegram_id))
         admin.is_super_admin = True
         return await self.admins.create(admin)
+
+    async def demote_super_admin(
+        self, requester_telegram_id: str, target_telegram_id: str, role: str = "admin", extra_permissions=None
+    ) -> AdminUser:
+        """Turn a super admin back into a regular staff member with the given role (super admin only).
+        You cannot demote yourself or the owner account, so at least one super admin always remains."""
+        if not await self.is_super_admin(requester_telegram_id):
+            raise NotSuperAdminError("Only a super admin can demote a super admin")
+        target_id = str(target_telegram_id)
+        if target_id == str(requester_telegram_id):
+            raise ValueError("You cannot demote yourself. Ask another super admin to do it.")
+        if self.is_owner(target_id):
+            raise NotSuperAdminError("This is the owner account (SUPER_ADMIN_TELEGRAM_ID) and cannot be demoted here")
+        if role not in control_logic.ASSIGNABLE_ROLES:
+            raise ValueError(f"Role must be one of: {', '.join(control_logic.ASSIGNABLE_ROLES)}")
+        target = await self.get_admin(target_id)
+        if target is None:
+            raise ValueError("That person is not on the staff list")
+        if not target.is_super_admin:
+            raise ValueError("That person is not a super admin")
+        target.is_super_admin = False
+        target.role = role
+        target.extra_permissions = control_logic.validate_extra_permissions(extra_permissions)
+        return await self.admins.create(target)
 
     # ------------------------------------------------------------------
     # Payment methods

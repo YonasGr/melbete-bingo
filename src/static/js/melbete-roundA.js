@@ -14,16 +14,32 @@
 
   // ------------------------------------------------------------------ language toggle
   function paintLangButton() {
-    const b = $("lang-toggle-btn");
-    if (!b) return;
-    b.textContent = MB_I18N.lang === "am" ? "EN" : "አማ";
-    b.setAttribute("aria-label", mbT("lang_switch"));
-    b.title = mbT("lang_switch");
+    const seg = $("lang-seg");
+    if (!seg) return;
+    seg.setAttribute("aria-label", mbT("lang_switch"));
+    seg.querySelectorAll(".lang-seg-opt").forEach((o) => {
+      const on = o.dataset.lang === MB_I18N.lang;
+      o.classList.toggle("active", on);
+      o.setAttribute("aria-checked", on ? "true" : "false");
+      o.tabIndex = on ? 0 : -1;
+    });
   }
   function wireLangButton() {
-    const b = $("lang-toggle-btn");
-    if (!b) return;
-    b.addEventListener("click", () => MB_I18N.setLang(MB_I18N.lang === "am" ? "en" : "am"));
+    const seg = $("lang-seg");
+    if (!seg) return;
+    seg.addEventListener("click", (e) => {
+      const o = e.target.closest(".lang-seg-opt");
+      if (!o || o.dataset.lang === MB_I18N.lang) return;
+      MB_I18N.setLang(o.dataset.lang);
+    });
+    // Arrow keys move between the two options, as a radio group should.
+    seg.addEventListener("keydown", (e) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+      e.preventDefault();
+      const next = MB_I18N.lang === "am" ? "en" : "am";
+      MB_I18N.setLang(next);
+      seg.querySelector(`.lang-seg-opt[data-lang="${next}"]`)?.focus();
+    });
     paintLangButton();
   }
 

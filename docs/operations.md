@@ -6,9 +6,9 @@ For the people who run the admin panel (`<url>/admin`). Login and 2FA are in [se
 
 | Role | Can |
 |---|---|
-| Super admin | Everything, including staff, agents and configuration. |
+| Super admin | Everything, including staff, agents and configuration. The only role that can terminate a running round. |
 | Finance | Approve/reject deposits and withdrawals (including large ones), view players, view the audit log, reconciliation and exports. |
-| Manager | Edit and publish Control Center settings, emergency switches, view players and the audit log. |
+| Manager | Edit and publish Control Center settings, emergency switches, view players and the audit log, start/reset waiting lobbies. |
 | Support | View players, ban/freeze, add notes. No money actions. |
 | Admin (legacy) | Money approvals, view players, draft control changes, view the audit log. |
 
@@ -24,7 +24,7 @@ Recorded, among others:
 - Player money and access: `wallet.reset`, `player.ban`, `player.unban`, `player.freeze`, notes and limits.
 - Agents: create, suspend, activate, commission, rewards, **float adjustments**, reward settings, tiers, cancellations, applications.
 - Configuration: settings, payment methods (save/delete), Control Center publish/rollback, emergency switches, bot toggles, deposit toggle.
-- Staff: add, remove, role change, promote. Failed admin logins.
+- Staff: add, remove, role change, promote, demote. Failed admin logins.
 - Games and broadcasts: terminate/delete a game, start/cancel a broadcast.
 - **Exports:** `export.deposits` and `export.withdrawals` record who pulled player and payout data, the date range, status filter and row count.
 

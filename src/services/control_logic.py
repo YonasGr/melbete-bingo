@@ -639,7 +639,7 @@ PERMISSIONS = {
     "control.emergency": "Use maintenance mode and the kill switch instantly",
     "experience.edit": "Edit game-experience settings (celebrations, countdown, voice, timings)",
     "rewards.manage": "Start, stop and schedule rewards; reward blocks and manual grants",
-    "games.manage": "End running rounds, start or reset waiting lobbies, delete waiting rooms",
+    "games.manage": "Start or reset waiting lobbies, delete waiting rooms (ending a running round is super admin only)",
     "staff.manage": "Add or remove staff and change roles",
     "audit.view": "View the audit log",
 }

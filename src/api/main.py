@@ -183,7 +183,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": detail})
 
 
-APP_VERSION = "15"
+APP_VERSION = "22"
 
 
 class CacheStaticFiles(StaticFiles):

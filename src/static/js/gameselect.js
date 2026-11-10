@@ -530,11 +530,13 @@ function scheduleQuickPicker() {
 }
 
 // No active lobby: keep the picker on screen, greyed out, until the next round opens.
+let pickerRange = { min: 1, max: 1000 };   // last cartela range seen, so the greyed-out grid matches the real one
+
 function renderPickerWaiting(box) {
   quickCards = new Map(); quickRoomId = null; quickPickerOpen = false;
   const grid = document.createElement("div");
   grid.className = "qp-grid";
-  for (let n = 1; n <= 500; n++) {
+  for (let n = pickerRange.min; n <= pickerRange.max; n++) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "qp-chip"; b.textContent = n; b.disabled = true;
     b.setAttribute("aria-label", `Cartela ${n}, not open yet`);
@@ -569,7 +571,8 @@ async function renderCartelaPicker() {
     }
     const maxCards = Math.max(1, Math.min(room.cards_per_player || MAX_CARTELAS, MAX_CARTELAS));
     const remaining = Math.max(0, maxCards - mine.length);
-    const min = room.cartela_min || 1, max = room.cartela_max || 500;
+    const min = room.cartela_min || 1, max = room.cartela_max || 1000;
+    pickerRange = { min, max };
     const taken = new Set(room.taken_cartelas || []);
 
     const head = document.createElement("div");
@@ -1158,49 +1161,168 @@ async function populateProfileDrawer() {
 
   fields.innerHTML = "";
   const frag = document.createDocumentFragment();
-
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : String(v ?? "0");
+  };
+  const copyIcon = () => {
+    const i = el("span", "pf-copy-ico");
+    i.setAttribute("aria-hidden", "true");
+    i.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2.5" stroke="currentColor" stroke-width="2"/><path d="M5 15V6.5A2.5 2.5 0 017.5 4H15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    return i;
+  };
   const addSection = (title, items) => {
-    const head = document.createElement("div");
-    head.className = "profile-section-title";
-    head.textContent = title;
-    frag.appendChild(head);
-
-    const group = document.createElement("div");
-    group.className = "profile-group";
-    items.forEach(([label, value, extraClass]) => {
-      const field = document.createElement("div");
-      field.className = "profile-field";
-      const lbl = document.createElement("span");
-      lbl.className = "label";
-      lbl.textContent = label;
-      const val = document.createElement("span");
-      val.className = "value" + (extraClass ? ` ${extraClass}` : "");
-      val.textContent = value;
-      field.append(lbl, val);
+    frag.appendChild(el("div", "profile-section-title", title));
+    const group = el("div", "profile-group");
+    items.forEach(([label, value, extra]) => {
+      const field = el("div", "profile-field");
+      field.appendChild(el("span", "label", label));
+      if (extra && extra.chip) {
+        field.appendChild(el("span", `pf-status ${extra.chip}`, value));
+      } else {
+        const val = el("span", "value" + (extra && extra.cls ? ` ${extra.cls}` : ""), value);
+        if (extra && extra.copy) { val.dataset.copy = extra.copy; val.classList.add("pf-copyable"); val.appendChild(copyIcon()); }
+        field.appendChild(val);
+      }
       group.appendChild(field);
     });
     frag.appendChild(group);
   };
 
-  addSection("Identity", [
-    ["Name", tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : profile.display_name || "-"],
-    ["Username", tgUser?.username ? `@${tgUser.username}` : "-"],
-    ["User ID", String(tgUser?.id || profile.telegram_id || "-")],
-  ]);
+  // ---- Identity: initial avatar, large name, @username, tap-to-copy ID chip
+  const fullName = tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ") : (profile.display_name || "");
+  const userId = String(tgUser?.id || profile.telegram_id || "");
+  const avatar = document.querySelector("#profile-drawer .profile-avatar");
+  if (avatar) {
+    avatar.classList.remove("has-photo");
+    avatar.textContent = (Array.from(fullName.trim())[0] || "\u{1F464}").toUpperCase();
+    const photo = tgUser?.photo_url;
+    if (photo && /^https:\/\//i.test(photo)) {
+      // Real Telegram photo when it loads; otherwise the initial above stays.
+      const img = new Image();
+      img.alt = ""; img.className = "profile-avatar-img"; img.referrerPolicy = "no-referrer"; img.decoding = "async";
+      img.onload = () => { avatar.textContent = ""; avatar.appendChild(img); avatar.classList.add("has-photo"); };
+      img.src = photo;
+    }
+  }
+  const hero = el("div", "pf-hero");
+  const nameEl = el("div", "pf-name");
+  nameEl.appendChild(document.createTextNode(fullName || "-"));
+  if (profile.is_registered && profile.phone_number) {
+    // The number comes from Telegram's own share-contact button, so it is a verified phone.
+    const badge = el("span", "pf-verified");
+    badge.setAttribute("role", "img");
+    badge.setAttribute("aria-label", "Phone number verified");
+    badge.title = "Phone number verified";
+    badge.innerHTML = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    nameEl.appendChild(badge);
+  }
+  hero.appendChild(nameEl);
+  if (tgUser?.username) hero.appendChild(el("div", "pf-username", `@${tgUser.username}`));
+  if (userId) {
+    const chip = el("button", "pf-id-chip");
+    chip.type = "button";
+    chip.dataset.copy = userId;
+    chip.setAttribute("aria-label", `Copy user ID ${userId}`);
+    chip.append(el("span", "pf-id-label", "ID"), el("span", "pf-id-num", userId), copyIcon());
+    hero.appendChild(chip);
+  }
+  frag.appendChild(hero);
 
+  // ---- Wallet: big balance card, then Withdrawable / Bonus tiles
+  frag.appendChild(el("div", "profile-section-title", "Wallet"));
+  const wallet = el("div", "pf-wallet");
+  const drawerOpen = document.getElementById("profile-drawer")?.classList.contains("open");
+  const reduceMotion = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage blocked */ } },
+  };
+  let hidden = store.get("melbete_hide_balance") === "1";
+  const moneyNodes = [];   // [node, visible text] - the mask swaps between the two
+  const money = (node, text) => { node.classList.add("pf-money"); moneyNodes.push([node, text]); node.textContent = text; return node; };
+  const stopCount = (node) => { if (node._raf) { cancelAnimationFrame(node._raf); node._raf = 0; } };
+  const applyMask = () => {
+    moneyNodes.forEach(([node, text]) => { stopCount(node); node.textContent = hidden ? "\u2022\u2022\u2022\u2022" : text; node.classList.toggle("masked", hidden); });
+    eye.setAttribute("aria-pressed", hidden ? "true" : "false");
+    eye.setAttribute("aria-label", hidden ? "Show balance" : "Hide balance");
+    eye.innerHTML = hidden ? EYE_OFF : EYE_ON;
+  };
+  const EYE_ON = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/></svg>';
+  const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A10.6 10.6 0 0112 5c6.4 0 10 7 10 7a17 17 0 01-3.2 4M6.6 6.7C3.6 8.6 2 12 2 12s3.6 7 10 7a9.9 9.9 0 004.3-1M9.9 9.9a3 3 0 004.2 4.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const total = el("div", "pf-balance");
+  const top = el("div", "pf-balance-top");
+  top.appendChild(el("div", "pf-balance-label", "Total balance"));
+  const eye = el("button", "pf-eye");
+  eye.type = "button";
+  eye.addEventListener("click", () => {
+    hidden = !hidden;
+    store.set("melbete_hide_balance", hidden ? "1" : "0");
+    applyMask();
+  });
+  top.appendChild(eye);
+  total.appendChild(top);
+  const amountRow = el("div", "pf-balance-amount");
+  const amtNode = money(el("span", "pf-amt"), num(profile.balance));
+  amountRow.append(amtNode, el("span", "pf-cur", "ETB"));
+  total.appendChild(amountRow);
+  wallet.appendChild(total);
+
+  const tiles = el("div", "pf-tiles");
+  [["Withdrawable", withdrawableOf(profile), "success"], ["Bonus Credit", profile.bonus_balance, "bonus"]].forEach(([label, value, kind]) => {
+    const t = el("div", `pf-tile ${kind}`);
+    t.appendChild(el("div", "pf-tile-label", label));
+    const v = el("div", "pf-tile-value");
+    v.append(money(el("span", "pf-tile-num"), num(value)), el("span", "pf-tile-cur", "ETB"));
+    t.appendChild(v);
+    tiles.appendChild(t);
+  });
+  wallet.appendChild(tiles);
+  frag.appendChild(wallet);
+  applyMask();
+
+  // Presentation only: animate the number that was just written, and flag an increase since the last visit.
+  const curBalance = Number(profile.balance);
+  if (drawerOpen && Number.isFinite(curBalance)) {
+    const key = `melbete_pf_bal_${state.playerId}`;
+    const last = parseFloat(store.get(key));
+    store.set(key, String(curBalance));
+    if (!hidden && !reduceMotion && curBalance > 0) {
+      const decimals = Math.min(2, (String(curBalance).split(".")[1] || "").length);
+      const t0 = performance.now(), dur = 750;
+      const tick = (now) => {
+        const p = Math.min(1, (now - t0) / dur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        amtNode.textContent = p >= 1 ? num(curBalance) : num((curBalance * eased).toFixed(decimals));
+        amtNode._raf = p < 1 ? requestAnimationFrame(tick) : 0;
+      };
+      amtNode.textContent = num(0);
+      amtNode._raf = requestAnimationFrame(tick);
+    }
+    if (Number.isFinite(last) && curBalance > last) {
+      const chip = el("span", "pf-delta", `+${num((curBalance - last).toFixed(2))}`);
+      total.classList.add("pf-sparkle");
+      amountRow.appendChild(chip);
+      setTimeout(() => { total.classList.remove("pf-sparkle"); chip.remove(); }, 3200);
+    }
+  }
+
+  // ---- Account
+  const hasPhone = !!profile.phone_number;
   addSection("Account", [
-    ["Contact", profile.phone_number || "Not shared"],
-    ["Status", profile.is_registered ? "Registered" : "Unregistered", profile.is_registered ? "success" : ""],
-  ]);
-
-  addSection("Wallet", [
-    ["Total Balance", `${profile.balance} ETB`, "highlight"],
-    ["Withdrawable", `${withdrawableOf(profile)} ETB`, "success"],
-    ["Bonus Credit", `${profile.bonus_balance} ETB`],
-    ["Lifetime In", `${profile.lifetime_deposited} ETB`],
+    ["Contact", profile.phone_number || "Not shared", hasPhone ? { copy: String(profile.phone_number) } : { cls: "muted-value" }],
+    ["Status", profile.is_registered ? "Registered" : "Unregistered", { chip: profile.is_registered ? "ok" : "warn" }],
   ]);
 
   fields.appendChild(frag);
+  wireCopyableElements(fields);
   const agentBox = document.createElement("div");
   agentBox.className = "profile-agent";
   fields.appendChild(agentBox);

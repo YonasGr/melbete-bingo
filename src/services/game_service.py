@@ -13,10 +13,10 @@ class CardGenerator:
     """Generate bingo cards for different variants"""
 
     @staticmethod
-    def generate_cartela_card(cartela_number: int, cartela_min: int = 1, cartela_max: int = 500) -> List[List[Dict[str, Any]]]:
+    def generate_cartela_card(cartela_number: int, cartela_min: int = 1, cartela_max: int = 1000) -> List[List[Dict[str, Any]]]:
         """
         Generate a 75-ball bingo card (5x5 grid) for a specific cartela
-        number (1-100 by default), Ethiopian-hall style: the layout is
+        number (1-1000 by default), Ethiopian-hall style: the layout is
         *deterministic*, so cartela #42 always produces exactly the same 24
         numbers arranged the same way for every player, every game, forever.
         The center cell holds the cartela number itself (instead of a plain
@@ -59,7 +59,7 @@ class CardGenerator:
 
         # The center "free" cell is pre-marked. We deliberately do NOT store
         # the cartela number here as its `value`: a cartela number can be up
-        # to cartela_max (default 500), which is outside the 1-75 ball range.
+        # to cartela_max (default 1000), which is outside the 1-75 ball range.
         # Leaving a 75+ number in the card grid would let it leak into any
         # number-based UI (e.g. a "matched number" highlight) and look like a
         # ball call such as "O240". The cartela number is only metadata, so we
@@ -173,7 +173,7 @@ class CardGenerator:
         return card
     
     @staticmethod
-    def generate_card(variant: str = "75", cartela_number: Optional[int] = None, cartela_min: int = 1, cartela_max: int = 500) -> List[List[Dict[str, Any]]]:
+    def generate_card(variant: str = "75", cartela_number: Optional[int] = None, cartela_min: int = 1, cartela_max: int = 1000) -> List[List[Dict[str, Any]]]:
         """Generate card based on variant. Pass `cartela_number` for the
         live global game (recommended) to get the deterministic, chosen
         layout; omit it only for legacy/random-card testing."""

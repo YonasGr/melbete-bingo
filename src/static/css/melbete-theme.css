@@ -111,12 +111,13 @@ button:active:not(:disabled) { transform: scale(.97); }
 .qp-head h2 { margin: 0; font-size: 17px; color: var(--melbete-ink); }
 .qp-sub { margin: 2px 0 0; font-size: 13px; color: var(--melbete-ink-2); }
 .qp-random { flex: none; min-height: 44px; padding: 0 16px; border: 0; border-radius: 999px; font: 700 14px/1 inherit; color: #fff; background: var(--melbete-grad); cursor: pointer; }
-.qp-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
-.qp-chip { min-height: 44px; border: 1px solid var(--melbete-border); border-radius: 12px; font: 700 15px/1 inherit; color: var(--melbete-ink); background: var(--melbete-surface-2); cursor: pointer; }
+.qp-grid { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+.qp-chip { min-height: 36px; padding: 0; border: 1px solid var(--melbete-border); border-radius: 8px; font: 700 12px/1 inherit; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--melbete-ink); background: var(--melbete-surface-2); cursor: pointer; }
 .qp-chip:active:not(:disabled) { background: var(--melbete-grad); border-color: transparent; }
 .qp-chip:disabled, .qp-random:disabled { opacity: .5; }
 .qp-link { display: block; width: 100%; margin-top: 10px; min-height: 40px; border: 0; background: none; font: 600 14px/1 inherit; color: var(--melbete-blue); cursor: pointer; }
-@media (max-width: 340px) { .qp-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 340px) { .qp-chip { font-size: 10px; } }
+@media (min-width: 480px) { .qp-grid { gap: 6px; } .qp-chip { min-height: 42px; font-size: 14px; } }
 
 /* ---- Glossy bingo ball (draw screen) ---- */
 .gv-ball-wrap { overflow: hidden; }
@@ -266,7 +267,7 @@ html[data-melbete-level="crown"] #my-cards-container > * { box-shadow: 0 0 0 2px
 .qp-dot.free { background: #FFC933; border-color: #FFC933; }
 .qp-dot.taken { opacity: .4; }
 .qp-chip.taken { opacity: .28; text-decoration: line-through; cursor: not-allowed; }
-.qp-chip { min-height: 46px; }
+.qp-chip { min-height: 36px; }
 
 /* hub picker: 1-4 cartelas */
 .qp-chip.selected { background: var(--melbete-grad); border-color: transparent; color: #14110A; box-shadow: 0 0 0 2px var(--melbete-gold, #FFC933); }

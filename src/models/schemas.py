@@ -144,7 +144,7 @@ class GameRoom(BaseModel):
     countdown_seconds: int = 30  # time players get to pick cartelas before auto-start
     # Cartela number range players can pick from.
     cartela_min: int = 1
-    cartela_max: int = 500
+    cartela_max: int = 1000
     # Wall-clock time the countdown began (first cartela reserved this
     # round). Lets the server correctly resume a countdown - or an
     # in-progress draw loop - after a restart, instead of leaving the round
@@ -304,10 +304,10 @@ class SystemSettings(BaseModel):
     min_players_to_start: int = 5  # legacy, no longer used to start a round
     # Cartelas (not players) needed before the lobby countdown begins.
     min_cartelas_to_start: int = 3
-    # Cartela number range players can pick from (1-500 by default).
+    # Cartela number range players can pick from (1-1000 by default).
     # Admin-tunable so the game can be shrunk or expanded without redeploy.
     cartela_min: int = 1
-    cartela_max: int = 500
+    cartela_max: int = 1000
     # Currently unused. Base rule as of this version: a round only ever
     # ends because a player won it - never on a timer, regardless of how
     # long it's been idle. Field kept (rather than removed) purely so

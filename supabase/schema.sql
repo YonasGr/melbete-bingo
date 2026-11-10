@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS game_rooms (
     min_cartelas_to_start INTEGER NOT NULL DEFAULT 4 CHECK (min_cartelas_to_start >= 1),
     countdown_seconds     INTEGER NOT NULL DEFAULT 30,
     cartela_min           INTEGER NOT NULL DEFAULT 1,
-    cartela_max           INTEGER NOT NULL DEFAULT 500,
+    cartela_max           INTEGER NOT NULL DEFAULT 1000,
     countdown_started_at  TIMESTAMPTZ,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
     min_players_to_start            INTEGER NOT NULL DEFAULT 5 CHECK (min_players_to_start >= 2),
     min_cartelas_to_start           INTEGER NOT NULL DEFAULT 4 CHECK (min_cartelas_to_start >= 1),
     cartela_min                     INTEGER NOT NULL DEFAULT 1,
-    cartela_max                     INTEGER NOT NULL DEFAULT 500,
+    cartela_max                     INTEGER NOT NULL DEFAULT 1000,
     game_inactivity_timeout_minutes INTEGER NOT NULL DEFAULT 0,
     support_contact                 TEXT NOT NULL DEFAULT '@melbete_support_1',
     bot_system_enabled              BOOLEAN NOT NULL DEFAULT FALSE,

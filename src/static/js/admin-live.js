@@ -32,8 +32,12 @@
     const box = document.getElementById("live-today");
     if (!box) return;
     const t = d.today, p = d.pending;
+    const canPublish = typeof state !== "undefined" && !!(state.isSuperAdmin || (state.perms && state.perms.has("control.publish")));
+    const alertHtml = (a) => (a.action === "publish" && canPublish
+      ? `<div class="lv-alert ${a.level} lv-alert-row"><button type="button" class="lv-alert-text" data-lv-tab="${a.tab}">${esc(a.text)} →</button><button type="button" class="primary-btn lv-publish" data-lv-publish>Publish</button></div>`
+      : `<button class="lv-alert ${a.level}" ${a.tab ? `data-lv-tab="${a.tab}"` : ""}>${esc(a.text)}${a.tab ? " →" : ""}</button>`);
     const alerts = d.alerts.length
-      ? `<div class="lv-alerts">${d.alerts.map((a) => `<button class="lv-alert ${a.level}" ${a.tab ? `data-lv-tab="${a.tab}"` : ""}>${esc(a.text)}${a.tab ? " →" : ""}</button>`).join("")}</div>`
+      ? `<div class="lv-alerts">${d.alerts.map(alertHtml).join("")}</div>`
       : `<div class="lv-alerts"><span class="lv-alert ok">All clear: nothing needs attention right now.</span></div>`;
     const rooms = d.rooms.length ? d.rooms.map((r) => `${esc(r.track.replace("_", " "))}: ${esc(r.state)}, ${r.players} player${r.players === 1 ? "" : "s"}`).join(" · ") : "No active round";
     box.innerHTML = `${alerts}
@@ -62,6 +66,12 @@
   }
 
   document.addEventListener("click", (e) => {
+    const pb = e.target.closest && e.target.closest("[data-lv-publish]");
+    if (pb && document.getElementById("live-today")?.contains(pb)) {
+      pb.disabled = true;
+      Promise.resolve(window.publishControlDraft ? window.publishControlDraft() : false).finally(() => { pb.disabled = false; loadLive(); });
+      return;
+    }
     const b = e.target.closest && e.target.closest("[data-lv-tab]");
     if (b && document.getElementById("live-today")?.contains(b)) goToTab(b.dataset.lvTab);
   });

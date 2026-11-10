@@ -88,7 +88,7 @@ def build_alerts(live: dict, control_cfg: dict) -> list[dict]:
     if control_cfg.get("money", {}).get("auto_approve", {}).get("enabled"):
         alerts.append({"level": "info", "text": "Auto-approve is ON for small deposits from trusted players.", "tab": "control"})
     if live.get("unpublished_changes"):
-        alerts.append({"level": "info", "text": f"{live['unpublished_changes']} Control Center change(s) saved but not published.", "tab": "control"})
+        alerts.append({"level": "info", "text": f"{live['unpublished_changes']} Control Center change(s) saved but not published.", "tab": "control", "action": "publish"})
 
     order = {"critical": 0, "warning": 1, "info": 2}
     return sorted(alerts, key=lambda a: order[a["level"]])

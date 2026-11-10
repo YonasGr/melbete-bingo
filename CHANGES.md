@@ -1,3 +1,58 @@
+## Play-streak milestones x10
+- Streak reward milestones are now **30 days** (10 ETB bonus) and **70 days** (30 ETB bonus); they were 3 and 7 days. Only the day requirement changed, the bonus amounts are the same (play-only credit, as before). Default in `config.py`; the example in `env.example` matches.
+- If Azure has `ENGAGEMENT_STREAK_REWARDS` set, that value wins over the code default: set it to `30:10,70:30` (or any `days:ETB` pairs) and restart.
+- Players mid-streak: a streak of 12 days now heads for 30, not 3. Rewards already paid for 3/7 days are not paid again. Streak reminders and reward notifications read the numbers from this setting, so their text updates by itself.
+- Daily missions (`ENGAGEMENT_MISSIONS`, default `3:20,5:40,10:80` = rounds:bonus) are unchanged.
+
+## 1,000 cartelas and a 10-across layout
+- **Range 1-1000** (was 1-500): the default `cartela_max` is now 1000 in the code (`schemas.py`, `game_service.py`, `bingo.py`), `supabase/schema.sql` and the front end. Cartelas 1-500 keep exactly the same layouts (each card is generated from its own number); 501-1000 are new. I checked that all 1,000 layouts are different.
+- **Layout**: both cartela pickers (the home picker and the in-room picker) show **10 per row**, with smaller numbers so four-digit numbers fit on a phone. Names under taken cells are hidden in the grid (the colour shows taken/yours; list view still shows names).
+- **Go-live step**: run `supabase/migrations/202611090001_cartelas_1000.sql` once. It raises the live setting from 500 to 1000 and widens lobbies that are still waiting. Alternative with no SQL: Control Center > Games > "Cartela numbers to" = 1000, then Publish. Rounds already running keep 500 until they end.
+- Tests added in `test_cartela.py` (not run here: pytest is not installed; the uniqueness check was run directly). `APP_VERSION` is 22.
+
+## One-tap Publish on the dashboard banner
+- The Dashboard banner "N Control Center change(s) saved but not published" now has a **Publish** button (shown only to roles with `control.publish`: Super admin, Manager). It refreshes the draft, opens the same review box listing every change (old to new), and publishes on **Publish now**; the banner then clears.
+- If you have unsaved edits open in Control Center it asks you to save the draft first; if there is nothing to publish it says so.
+- Control Center: roles without publish now see "Your role can't publish. Ask a Super Admin or Manager", and unsaved edits show "Save your draft first, then tap Publish".
+- Uses the existing `POST /api/admin/control/publish` (permission still enforced on the server). `APP_VERSION` is 21.
+
+## SUPER_ADMIN_TELEGRAM_ID accepts several IDs
+- Cause of "I am super admin but can't publish": the variable held two IDs (`898505692,394684531`) but was read as ONE ID, so the app created a single super admin whose Telegram ID was that whole string. It matched nobody, and the real accounts were only basic admins (no publish).
+- Now the variable takes one ID or several separated by commas, semicolons or spaces. At every startup each valid (all-digit) ID is created as, or upgraded to, super admin and treated as an owner (cannot be removed or demoted from the panel). Non-numeric entries are ignored.
+- After deploying: restart the app, sign in again, then remove the bogus staff record `898505692,394684531` from Admins (Remove). It is no longer an owner, so Remove works.
+- Tests in `test_admin_service.py` (not run here: pytest is not installed).
+
+## My Profile: Lifetime In removed
+- The "Lifetime In" row is gone from the Wallet section (the hide-balance mask now covers Total, Withdrawable and Bonus only). `APP_VERSION` is 20.
+
+## My Profile: balance animation, hide balance, real photo, verified badge
+- **Count-up and sparkle**: the Total balance counts up from 0 each time the drawer opens. If the balance is higher than the last time you opened it on this device, the card flashes a gold sweep and shows a green "+N" chip for a few seconds. Both are skipped when "reduce motion" is on, and the count-up is skipped while the balance is hidden.
+- **Hide balance**: an eye button on the balance card masks Total, Withdrawable, Bonus and Lifetime as "••••". The choice is remembered on the device (`melbete_hide_balance`). Profile only; the home screen balance is unchanged.
+- **Real Telegram photo**: the avatar shows the player's Telegram photo (`photo_url`, https only) when it loads, otherwise the initial letter.
+- **Verified badge**: a gold check beside the name for registered players with a phone number (shared through Telegram's contact button).
+- Presentation only: no balance, wallet or API logic changed. "Last seen balance" is kept in `localStorage` (`melbete_pf_bal_<player>`), so it is per device. `APP_VERSION` is 19.
+
+## My Profile: premium layout and text styling
+- **Identity**: initial-letter avatar with a gold ring, large name, gold @username, and a tap-to-copy User ID chip (replaces the Identity rows).
+- **Wallet**: a gold-lit Total balance card (large tabular numerals) with Withdrawable (green) and Bonus Credit (amber) tiles and a Lifetime In row.
+- **Account**: refined card; Contact is tap-to-copy; Status is a pill (green dot Registered / amber Unregistered).
+- Text: small-caps gold-barred section titles, tabular numerals, brighter values on muted labels; looser line height for Amharic; staggered fade-in (off for reduced-motion). Drawer gets a deeper gradient surface.
+- Presentation only: same profile data, same agent section below. `melbete-premium.css`, `gameselect.js` (`populateProfileDrawer`). `APP_VERSION` is 18.
+
+## Profile footer: two-option language switch
+- The footer's single "EN" / "አማ" pill (which showed the language you would switch *to*) is now a segmented control, **EN | አማ**, with the active language highlighted in gold. One tap on the other option switches; the group is a radio group (arrow keys move between options, screen readers hear which is selected). Same storage and the same `melbete:lang` event as before, so every screen updates as it did.
+- Also included: the "Total Balance" value in My Profile was nearly invisible (dark token on a dark card); it now uses the gold accent. `APP_VERSION` is 17.
+
+## Admin management: promote, demote and remove
+- **Admin > Admins** (super admins): each staff card now shows its role and offers **Save role** (role picker), **Make super admin**, **Demote** (super admin back to a chosen role) and **Remove**, each with a confirmation. The Add form has a role picker. Cards show "You" and "Owner" badges.
+- New `POST /api/admin/admins/{telegram_id}/demote`; `GET /api/admin/admins` also returns the assignable roles, `is_owner` and `is_you`; `GET /api/admin/me` returns your `telegram_id`.
+- Safety rules (enforced on the server): nobody can remove or demote themselves; the owner account (`SUPER_ADMIN_TELEGRAM_ID`, which is re-created at every startup) cannot be removed or demoted; a super admin can be removed or demoted only by another super admin, so at least one always remains; promote needs a numeric Telegram ID and refuses someone who is already super; removing someone who is not on the list is an error.
+- All of it is audited (`staff.promote`, `staff.demote`, `staff.remove`, `staff.role`, `staff.add`) and still alerts admins. `APP_VERSION` is 16.
+- Not run with pytest here (not installed); the new service tests are in `test_admin_service.py` and the guard logic was checked with stand-ins. Accounts listed in the `ADMIN_IDS` environment variable are not in the database, so they cannot be removed from this screen.
+
+## Terminating a running round is super admin only
+- `POST /api/admin/games/{id}/terminate` now requires a super admin (previously `games.manage`), and the "Terminate round" buttons (live game and Games list) only show for super admins. Managers and anyone given `games.manage` can still Start now, Reset lobby and delete waiting rooms. Admin, Support and Finance roles are unchanged.
+
 ## Admin: "Manage running games" permission
 - New permission `games.manage` (terminate running rounds, Start now, Reset lobby, delete waiting rooms). Managers have it by default; any other role can be given it per person under Extra permissions. Super admins always have it. Replaces the old super-admin-only rule on those four actions.
 - Control Center: added missing `staffHtml` renderer (blank Control Center fix). Settings tab no longer breaks on the removed 50 ETB / Bonus room fields.
