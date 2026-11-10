@@ -205,7 +205,7 @@ async def test_get_or_create_waiting_session(service):
     assert room.variant == "75"
     assert len(room.draw_pool) == 75
     assert room.cartela_min == 1
-    assert room.cartela_max == 500
+    assert room.cartela_max == 1000
     # Minimum cartelas to start is configured in SystemSettings (default 3)
     assert room.min_cartelas_to_start == 3
 

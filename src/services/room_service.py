@@ -529,11 +529,11 @@ class RoomService:
             # its original pool and reset the lobby instead.
             for card, funded_by in charged_cards:
                 await self.wallets.refund_stake(card.owner_id, room.stake_amount, room_id, funded_by)
-            await self.cancel_round(room_id, discarded=True)
+            await self.cancel_round(room_id)
             return None, dropped
 
         if not charged_cartelas:
-            await self.cancel_round(room_id, discarded=True)
+            await self.cancel_round(room_id)
             return None, dropped
 
         prize_pool = room.stake_amount * len(charged_cartelas)

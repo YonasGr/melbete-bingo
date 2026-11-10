@@ -945,7 +945,7 @@ async def admin_reset_lobby(
     room_id: str,
     request: Request,
     payload: dict = Body(default={}),
-    requester: str = Depends(require_perm("games.manage")),
+    requester: str = Depends(require_super_admin_dep),
 ):
     """Un-stick a waiting lobby: drop every cartela reservation and stop the countdown.
 
@@ -984,7 +984,7 @@ async def admin_force_start_game(
     room_id: str,
     request: Request,
     payload: dict = Body(default={}),
-    requester: str = Depends(require_perm("games.manage")),
+    requester: str = Depends(require_super_admin_dep),
 ):
     """Start a waiting lobby now instead of waiting for its countdown.
 

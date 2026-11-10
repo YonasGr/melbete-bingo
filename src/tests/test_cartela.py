@@ -45,7 +45,7 @@ def test_cartela_number_out_of_range_rejected():
     with pytest.raises(ValueError):
         CardGenerator.generate_cartela_card(0)
     with pytest.raises(ValueError):
-        CardGenerator.generate_cartela_card(501)
+        CardGenerator.generate_cartela_card(1001)
 
 
 def test_thousand_cartelas_are_all_valid_and_distinct():
