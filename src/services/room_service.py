@@ -414,14 +414,11 @@ class RoomService:
 
             taken = room.taken_cartelas + [cartela_number]
             fields = {"taken_cartelas": taken}
-            # Keep a short lobby from starting on a single player's first
-            # two reservations; the configured start threshold still governs
-            # charge_and_start(), but the visible countdown needs three cards.
-            configured_min = max(int(getattr(room, "min_cartelas_to_start", 3) or 1), 1)
-            min_cartelas = 1 if configured_min == 1 else max(configured_min, 3)
+            # The configured start threshold governs when countdown begins and round starts.
+            configured_min = max(int(getattr(room, "min_cartelas_to_start", None) or 1), 1)
+            min_cartelas = configured_min
             if len(taken) >= min_cartelas and not room.countdown_started_at:
-                # The lobby has enough cartelas (they may all belong to one
-                # player) - the 30s clock starts now.
+                # The lobby has enough cartelas - the countdown clock starts now.
                 room.countdown_started_at = datetime.now(timezone.utc)
                 fields["countdown_started_at"] = room.countdown_started_at
 
@@ -453,8 +450,8 @@ class RoomService:
             if card.cartela_number in room.taken_cartelas:
                 room.taken_cartelas.remove(card.cartela_number)
         fields = {"taken_cartelas": room.taken_cartelas}
-        configured_min = max(int(getattr(room, "min_cartelas_to_start", 3) or 1), 1)
-        min_cartelas = 1 if configured_min == 1 else max(configured_min, 3)
+        configured_min = max(int(getattr(room, "min_cartelas_to_start", None) or 1), 1)
+        min_cartelas = configured_min
         if len(room.taken_cartelas) < min_cartelas:
             # Not enough cartelas any more - stop the clock; it restarts
             # from the full 30s when the lobby reaches the minimum again.
@@ -484,24 +481,24 @@ class RoomService:
     # Running the round
     # ------------------------------------------------------------------
 
-    async def charge_and_start(self, room_id: str) -> Tuple[Optional[GameRoom], list]:
-        """Called once the lobby countdown ends. Charges every reserved
-        cartela's stake in one pass; anyone who can no longer afford it
+    async def charge_and_start(self, room_id: str, force: bool = False) -> Tuple[Optional[GameRoom], list]:
+        """Called once the lobby countdown ends or when forced early by an admin. Charges every
+        reserved cartela's stake in one pass; anyone who can no longer afford it
         (balance changed mid-countdown) is dropped from the round instead
         of blocking everyone else. Returns (room, dropped_player_ids) - room
         is None if literally nobody could be charged (round is cancelled).
         """
         async with self._exclusive_room(room_id):
-            return await self._charge_and_start_locked(room_id)
+            return await self._charge_and_start_locked(room_id, force=force)
 
-    async def _charge_and_start_locked(self, room_id: str) -> Tuple[Optional[GameRoom], list]:
+    async def _charge_and_start_locked(self, room_id: str, force: bool = False) -> Tuple[Optional[GameRoom], list]:
         room = await self.get_room(room_id)
         if room.state != "waiting":
             raise InvalidStateError("Game already started")
 
         cards = await self.cards.list_by_room(room_id)
         s = await self.settings_repo.get_or_create()
-        required_cartelas = max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
+        required_cartelas = 1 if force else max(int(getattr(room, "min_cartelas_to_start", None) or s.min_cartelas_to_start), 1)
         if len(cards) < required_cartelas:
             # Defensive: the lobby timer only runs with enough cartelas. Leave
             # an empty lobby open, but discard a partially reserved lobby
@@ -532,11 +529,11 @@ class RoomService:
             # its original pool and reset the lobby instead.
             for card, funded_by in charged_cards:
                 await self.wallets.refund_stake(card.owner_id, room.stake_amount, room_id, funded_by)
-            await self.cancel_round(room_id)
+            await self.cancel_round(room_id, discarded=True)
             return None, dropped
 
         if not charged_cartelas:
-            await self.cancel_round(room_id)
+            await self.cancel_round(room_id, discarded=True)
             return None, dropped
 
         prize_pool = room.stake_amount * len(charged_cartelas)
@@ -844,7 +841,7 @@ class RoomService:
         """
         cards = await self.cards.list_by_room(room_id)
         return (
-            int(getattr(await self.get_room(room_id), "min_cartelas_to_start", 3) or 3) == 1
+            int(getattr(await self.get_room(room_id), "min_cartelas_to_start", 1) or 1) == 1
             or len({card.owner_id for card in cards}) > 10
         )
 

@@ -122,8 +122,34 @@ class RoomRepository(BaseRepository):
             rows = await self._fetch(
                 "SELECT * FROM game_rooms WHERE end_reason LIKE 'admin_terminated%' ORDER BY created_at DESC LIMIT $1", limit
             )
+        elif state_filter == "cancelled":
+            rows = await self._fetch(
+                "SELECT * FROM game_rooms WHERE state = 'cancelled' ORDER BY created_at DESC LIMIT $1", limit
+            )
         else:
             rows = await self._fetch(
                 "SELECT * FROM game_rooms ORDER BY created_at DESC LIMIT $1", limit
             )
         return [GameRoom(**r) for r in rows]
+
+    async def delete(self, room_id: str) -> bool:
+        """Permanently delete a game room and all associated rows from the DB."""
+        await self._execute("DELETE FROM cards WHERE room_id = $1", room_id)
+        await self._execute("DELETE FROM claims WHERE room_id = $1", room_id)
+        await self._execute("DELETE FROM draw_logs WHERE room_id = $1", room_id)
+        res = await self._execute("DELETE FROM game_rooms WHERE id = $1", room_id)
+        return res != "DELETE 0"
+
+    async def delete_waiting_rooms(self, track: Optional[str] = None) -> int:
+        """Permanently delete all waiting game rooms from the DB (optionally filtered by track)."""
+        query = "SELECT id FROM game_rooms WHERE state = 'waiting'"
+        params = []
+        if track:
+            query += " AND track = $1"
+            params.append(track)
+        rows = await self._fetch(query, *params)
+        deleted = 0
+        for r in rows:
+            if await self.delete(r["id"]):
+                deleted += 1
+        return deleted

@@ -112,7 +112,7 @@
         <section id="tab-games" class="tab-panel">
           <header class="page-heading"><div><h2>Game operations</h2><p>Audit rounds, spins, tickets, bets, winners, and operational interventions.</p></div></header>
           <div class="product-switcher"><button class="active" data-game-type-tab="bingo"><span class="product-monogram bingo">B</span><span><strong>Melbete Bingo</strong><small>Rounds and rooms</small></span></button></div>
-          <article id="games-bingo-panel" class="work-panel game-history-panel"><div class="panel-heading"><div><h3>Melbete Bingo rounds</h3><p>Running, waiting, completed, and terminated rooms</p></div><div class="filter-tabs compact"><button class="active" data-game-filter="all">All</button><button data-game-filter="waiting">Waiting</button><button data-game-filter="running">Running</button><button data-game-filter="ended">Ended</button><button data-game-filter="terminated">Terminated</button></div></div><div id="games-list" class="record-list"></div></article>
+          <article id="games-bingo-panel" class="work-panel game-history-panel"><div class="panel-heading"><div><h3>Melbete Bingo rounds</h3><p>Running, waiting, completed, and terminated rooms</p></div><div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;"><div class="filter-tabs compact"><button class="active" data-game-filter="all">All</button><button data-game-filter="waiting">Waiting</button><button data-game-filter="running">Running</button><button data-game-filter="ended">Ended</button><button data-game-filter="terminated">Terminated</button><button data-game-filter="cancelled">Cancelled</button></div><button id="btn-clear-waiting-rooms" class="btn-delete hidden" type="button" style="padding:0.35rem 0.75rem;font-size:0.65rem;">🗑️ Delete all waiting</button></div></div><div id="games-list" class="record-list"></div></article>
         </section>
 
         <section id="tab-users" class="tab-panel">
@@ -257,6 +257,79 @@
   </div>
 
   <div id="user-manage-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title"><div class="user-modal-card"><header class="modal-header"><div><span>Player management</span><h3 id="user-modal-title">Manage player</h3></div><button id="user-modal-close" class="modal-close-btn" aria-label="Close">×</button></header><nav class="user-modal-nav"><button class="user-modal-tab active" data-user-tab="overview">Overview</button><button class="user-modal-tab" data-user-tab="reset-balance">Balances</button><button class="user-modal-tab" data-user-tab="deposits">Deposits</button><button class="user-modal-tab" data-user-tab="withdrawals">Withdrawals</button></nav><div class="user-modal-body"><section id="um-tab-overview" class="um-tab-panel active"><div id="um-player-details" class="um-details-grid"></div><div id="um-action-buttons" class="um-actions-row"></div></section><section id="um-tab-reset-balance" class="um-tab-panel"><form id="um-reset-form" class="admin-form"><input type="hidden" id="um-reset-player-id"><p id="um-current-balances" class="muted"></p><div class="form-grid"><div class="field"><label for="um-adjust-kind">Balance to change</label><select id="um-adjust-kind"><option value="real">Real (playable)</option><option value="winnings">Winnings (withdrawable)</option><option value="bonus">Bonus</option></select></div><div class="field"><label for="um-adjust-delta">Amount (ETB, negative to remove)</label><input type="number" id="um-adjust-delta" step="1" required placeholder="+100 or -50"></div></div><div class="field"><label for="um-reset-note">Reason (required, saved in the audit log)</label><input id="um-reset-note" required minlength="3" placeholder="Manual correction"></div><button class="primary-btn" type="submit">Apply adjustment</button></form></section><section id="um-tab-deposits" class="um-tab-panel"><div id="um-deposits-list" class="record-list"></div></section><section id="um-tab-withdrawals" class="um-tab-panel"><div id="um-withdrawals-list" class="record-list"></div></section></div></div></div>
+
+  <div id="game-manage-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="game-modal-title">
+    <div class="user-modal-card">
+      <header class="modal-header">
+        <div><span>Game operations</span><h3 id="game-modal-title">Manage game room</h3></div>
+        <button id="game-modal-close" class="modal-close-btn" aria-label="Close">×</button>
+      </header>
+      <div class="user-modal-body">
+        <form id="game-manage-form" class="admin-form">
+          <input type="hidden" id="gm-room-id">
+          <p id="gm-room-meta" class="muted small" style="margin-bottom: 1rem;"></p>
+          <div class="form-grid">
+            <div class="field">
+              <label for="gm-state">Room State</label>
+              <select id="gm-state">
+                <option value="waiting">waiting</option>
+                <option value="running">running</option>
+                <option value="ended">ended</option>
+                <option value="cancelled">cancelled</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="gm-stake">Stake amount (ETB)</label>
+              <input type="number" id="gm-stake" min="1" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-min-cartelas">Min cartelas to start</label>
+              <input type="number" id="gm-min-cartelas" min="1" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-min-players">Min players to start</label>
+              <input type="number" id="gm-min-players" min="1" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-countdown">Lobby countdown (seconds)</label>
+              <input type="number" id="gm-countdown" min="1" max="300" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-draw-interval">Seconds between balls (draw interval)</label>
+              <input type="number" id="gm-draw-interval" min="1" max="60" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-cards-per-player">Cartelas per player (1-4)</label>
+              <input type="number" id="gm-cards-per-player" min="1" max="4" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-prize-pool">Prize pool (ETB)</label>
+              <input type="number" id="gm-prize-pool" min="0" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-cartela-min">Cartela range min</label>
+              <input type="number" id="gm-cartela-min" min="1" step="1" required>
+            </div>
+            <div class="field">
+              <label for="gm-cartela-max">Cartela range max</label>
+              <input type="number" id="gm-cartela-max" min="1" step="1" required>
+            </div>
+            <div class="field span-2" style="display:flex;align-items:center;gap:0.5rem;padding-top:0.5rem;">
+              <input type="checkbox" id="gm-auto-draw" style="width:auto;margin:0;">
+              <label for="gm-auto-draw" style="margin:0;cursor:pointer;">Auto-draw numbers</label>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:1.5rem;gap:0.75rem;flex-wrap:wrap;">
+            <button id="gm-delete-btn" type="button" class="btn-delete" style="padding:0.65rem 1rem;">🗑️ Delete room from DB</button>
+            <div style="display:flex;gap:0.6rem;">
+              <button id="gm-cancel-btn" type="button" class="secondary-btn">Cancel</button>
+              <button type="submit" class="primary-btn">Save changes</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
   <div id="admin-toast" class="toast hidden" role="status" aria-live="polite"></div>
 </div>
 <script src="/static/js/admin.js?v={{ APP_VERSION }}"></script>

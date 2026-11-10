@@ -67,7 +67,7 @@ async def _room_summary(room, player_count: int = 0) -> dict:
         "estimated_prize": real_prize if room.state != "waiting" else round(room.stake_amount * len(room.taken_cartelas or []) * payout_ratio),
         "taken_cartelas": room.taken_cartelas,
         "min_players_to_start": room.min_players_to_start,
-        "min_cartelas_to_start": getattr(room, "min_cartelas_to_start", 2),
+        "min_cartelas_to_start": int(getattr(room, "min_cartelas_to_start", None) or 1),
         "countdown_seconds": room.countdown_seconds,
         "lobby_lock_seconds": get_control_service().peek_timing("lock_seconds", RoomService.LOBBY_LOCK_SECONDS),
         "countdown_started_at": room.countdown_started_at.isoformat() if getattr(room, "countdown_started_at", None) else None,

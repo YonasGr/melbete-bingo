@@ -640,19 +640,147 @@ async function forceStartGame(roomId, btn) {
 
 async function deleteGame(roomId, btn) {
   if (!roomId) return;
-  if (!confirm("Are you sure you want to delete this waiting room? This will permanently remove the room and all associated reserved card selections.")) return;
+  if (!confirm("Are you sure you want to permanently delete this game room from the database? This will remove the room and all its reserved cards.")) return;
 
-  btn.disabled = true;
-  btn.textContent = "Deleting…";
+  const label = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+  }
   try {
     await api(`/api/admin/games/${roomId}`, { method: "DELETE" });
-    toast("Waiting room deleted successfully.", "success");
+    toast("Game room permanently deleted from database.", "success");
+    closeGameManageModal();
     await Promise.all([loadOverviewStats(), loadGames()]);
   } catch (e) {
-    toast(e.message || "Failed to delete waiting room", "error");
-    btn.disabled = false;
-    btn.textContent = "🗑️ Delete waiting room";
+    toast(e.message || "Failed to delete game room", "error");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = label || "🗑️ Delete room";
+    }
   }
+}
+
+async function clearAllWaitingGames() {
+  if (!confirm("Are you sure you want to permanently delete ALL waiting game rooms from the database? This cannot be undone.")) return;
+  const btn = document.getElementById("btn-clear-waiting-rooms");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+  }
+  try {
+    const res = await api("/api/admin/games/clear-waiting", { method: "POST", body: JSON.stringify({}) });
+    toast(`Successfully deleted ${res.deleted_count || 0} waiting room(s) from database.`, "success");
+    await Promise.all([loadOverviewStats(), loadGames()]);
+  } catch (e) {
+    toast(e.message || "Failed to clear waiting rooms", "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "🗑️ Delete all waiting";
+    }
+  }
+}
+
+let _selectedGameForManage = null;
+
+async function openGameManageModal(roomId) {
+  const modal = document.getElementById("game-manage-modal");
+  if (!modal) return;
+  try {
+    const data = await api(`/api/admin/games/${roomId}`);
+    const g = data.room || data;
+    _selectedGameForManage = g;
+
+    document.getElementById("game-modal-title").textContent = `🎲 Manage Room ${String(g.id).slice(0, 8).toUpperCase()}`;
+    document.getElementById("gm-room-id").value = g.id;
+    const metaEl = document.getElementById("gm-room-meta");
+    if (metaEl) {
+      metaEl.innerHTML = `<strong>ID:</strong> ${escapeHtml(g.id)} · <strong>Track:</strong> ${escapeHtml(g.track)} · <strong>Created:</strong> ${new Date(g.created_at).toLocaleString()}`;
+    }
+
+    document.getElementById("gm-state").value = g.state || "waiting";
+    document.getElementById("gm-stake").value = g.stake_amount ?? 10;
+    document.getElementById("gm-min-cartelas").value = g.min_cartelas_to_start ?? 1;
+    document.getElementById("gm-min-players").value = g.min_players_to_start ?? 1;
+    document.getElementById("gm-countdown").value = g.countdown_seconds ?? 30;
+    document.getElementById("gm-draw-interval").value = g.draw_interval ?? 2;
+    document.getElementById("gm-cards-per-player").value = g.cards_per_player ?? 4;
+    document.getElementById("gm-prize-pool").value = g.prize_pool ?? 0;
+    document.getElementById("gm-cartela-min").value = g.cartela_min ?? 1;
+    document.getElementById("gm-cartela-max").value = g.cartela_max ?? 1000;
+    document.getElementById("gm-auto-draw").checked = g.auto_draw !== false;
+
+    const delBtn = document.getElementById("gm-delete-btn");
+    if (delBtn) {
+      delBtn.style.display = (g.state === "waiting" || g.state === "cancelled") ? "inline-flex" : "none";
+    }
+
+    modal.classList.remove("hidden");
+  } catch (e) {
+    toast(e.message || "Failed to load game room details", "error");
+  }
+}
+
+function closeGameManageModal() {
+  document.getElementById("game-manage-modal")?.classList.add("hidden");
+}
+
+function wireGameManageModal() {
+  document.getElementById("game-modal-close")?.addEventListener("click", closeGameManageModal);
+  document.getElementById("gm-cancel-btn")?.addEventListener("click", closeGameManageModal);
+  const modal = document.getElementById("game-manage-modal");
+  modal?.addEventListener("click", (e) => { if (e.target === modal) closeGameManageModal(); });
+
+  document.getElementById("btn-clear-waiting-rooms")?.addEventListener("click", clearAllWaitingGames);
+
+  document.getElementById("gm-delete-btn")?.addEventListener("click", () => {
+    const roomId = document.getElementById("gm-room-id").value;
+    if (roomId) deleteGame(roomId, document.getElementById("gm-delete-btn"));
+  });
+
+  document.getElementById("game-manage-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const roomId = document.getElementById("gm-room-id").value;
+    if (!roomId) return;
+
+    const payload = {
+      state: document.getElementById("gm-state").value,
+      stake_amount: parseInt(document.getElementById("gm-stake").value, 10),
+      min_cartelas_to_start: parseInt(document.getElementById("gm-min-cartelas").value, 10),
+      min_players_to_start: parseInt(document.getElementById("gm-min-players").value, 10),
+      countdown_seconds: parseInt(document.getElementById("gm-countdown").value, 10),
+      draw_interval: parseInt(document.getElementById("gm-draw-interval").value, 10),
+      cards_per_player: parseInt(document.getElementById("gm-cards-per-player").value, 10),
+      prize_pool: parseInt(document.getElementById("gm-prize-pool").value, 10),
+      cartela_min: parseInt(document.getElementById("gm-cartela-min").value, 10),
+      cartela_max: parseInt(document.getElementById("gm-cartela-max").value, 10),
+      auto_draw: document.getElementById("gm-auto-draw").checked,
+    };
+
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Saving…";
+    }
+
+    try {
+      await api(`/api/admin/games/${roomId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      toast("Game room stats updated successfully.", "success");
+      closeGameManageModal();
+      await Promise.all([loadOverviewStats(), loadGames()]);
+    } catch (err) {
+      toast(err.message || "Failed to update game room stats", "error");
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Save changes";
+      }
+    }
+  });
 }
 
 /* ===========================================================================
@@ -660,6 +788,10 @@ async function deleteGame(roomId, btn) {
    =========================================================================== */
 async function loadGames(filter = state.currentGameFilter) {
   state.currentGameFilter = filter;
+  const clearBtn = document.getElementById("btn-clear-waiting-rooms");
+  if (clearBtn) {
+    clearBtn.classList.toggle("hidden", filter !== "waiting" || !canManageGames());
+  }
   const endpoint = filter === "all" ? "/api/admin/games?limit=50" : `/api/admin/games?limit=50&state=${filter}`;
   try {
     const { games } = await api(endpoint);
@@ -685,13 +817,19 @@ async function loadGames(filter = state.currentGameFilter) {
         `<div class="winner-line">🏆 <strong>${escapeHtml(w.player_name)}</strong> — Cartela #${w.cartela_number} — ${money(w.payout)}</div>`
       ).join("");
       let actionsHtml = "";
+      const manageBtn = canManageGames()
+        ? `<button class="btn-manage" data-action="manage-game-stats" data-id="${g.id}">⚙️ Manage stats</button>`
+        : "";
       if (g.state === "running" && !g.terminated && canTerminateRound()) {
-        actionsHtml = `<div class="rc-actions"><button class="btn-terminate" data-action="terminate-game" data-id="${g.id}">⛔ Terminate round</button></div>`;
+        actionsHtml = `<div class="rc-actions">${manageBtn}<button class="btn-terminate" data-action="terminate-game" data-id="${g.id}">⛔ Terminate round</button></div>`;
       } else if (g.state === "waiting" && canManageGames()) {
         actionsHtml = `<div class="rc-actions">` +
+          manageBtn +
           `<button class="btn-terminate" data-action="force-start-game" data-id="${g.id}">▶️ Start now</button>` +
           `<button class="btn-terminate" data-action="reset-lobby" data-id="${g.id}">🔄 Reset lobby</button>` +
-          `<button class="btn-delete" data-action="delete-game" data-id="${g.id}">🗑️ Delete waiting room</button></div>`;
+          `<button class="btn-delete" data-action="delete-game" data-id="${g.id}">🗑️ Delete room</button></div>`;
+      } else if (canManageGames()) {
+        actionsHtml = `<div class="rc-actions">${manageBtn}${g.state === "cancelled" ? `<button class="btn-delete" data-action="delete-game" data-id="${g.id}">🗑️ Delete room</button>` : ""}</div>`;
       }
       return recordCard({
         id: g.id,
@@ -2104,6 +2242,7 @@ document.addEventListener("click", async (e) => {
   if (action === "manage-user") { const u = findUserById(id); if (u) openUserManageModal(u); return; }
   if (action === "terminate-game") { terminateGame(id, btn); return; }
   if (["promote-admin", "demote-admin", "set-admin-role", "remove-admin"].includes(action)) { adminStaffAction(action, id, btn); return; }
+  if (action === "manage-game-stats") { openGameManageModal(id); return; }
   if (action === "delete-game") { deleteGame(id, btn); return; }
   if (action === "reset-lobby") { resetLobby(id, btn); return; }
   if (action === "force-start-game") { forceStartGame(id, btn); return; }
@@ -2188,6 +2327,7 @@ async function main() {
   wireAuditFilterButtons();
   wireFinanceTools();
   wireUserManageModal();
+  wireGameManageModal();
   wireCommandCenter();
   document.getElementById("logout-btn")?.addEventListener("click", logout);
   document.getElementById("sidebar-logout-btn")?.addEventListener("click", logout);

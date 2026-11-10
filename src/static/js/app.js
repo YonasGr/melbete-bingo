@@ -370,6 +370,7 @@ function renderCartelaGrid() {
   const players = state.room?.players || [];
   const takenBy = {};
   players.forEach((p) => (takenBy[p.cartela_number] = p));
+  const myCartelaSet = new Set((state.myCards || []).map((c) => c.cartela_number));
   const atLimit = state.myCards.length >= state.cardsPerPlayer;
 
   cartelaGridButtons.forEach((btn, n) => {
@@ -378,7 +379,7 @@ function renderCartelaGrid() {
     // between (using data from before that request landed) touch it.
     if (btn.dataset.pending === "1") return;
 
-    const mine = takenBy[n]?.id === state.playerId;
+    const mine = myCartelaSet.has(n) || takenBy[n]?.id === state.playerId;
     const isTaken = taken.has(n);
     btn.classList.toggle("mine", mine);
     btn.classList.toggle("taken", !mine && isTaken);
@@ -416,7 +417,7 @@ function setLobbyLocked(locked) {
 }
 
 function lobbyStatusText(room) {
-  const min = room?.min_cartelas_to_start || 4;
+  const min = room?.min_cartelas_to_start ?? 1;
   const taken = room?.taken_cartelas?.length || 0;
   if (room?.countdown_started_at) return `${taken} cartela(s) reserved - the round starts when the countdown ends.`;
   const need = Math.max(min - taken, 0);
@@ -795,6 +796,19 @@ async function renderRoom(room) {
     await renderRunning(room, switchedRoom);
   } else if (room.state === "ended") {
     await renderEnded(room, switchedRoom);
+  } else if (room.state === "cancelled") {
+    // If a room was cancelled or discarded, fetch the fresh waiting room
+    // for this track rather than freezing on loading-view.
+    try {
+      const freshRoom = await api(`/api/session?track=${state.track || "real_10"}`);
+      if (freshRoom && freshRoom.id !== room.id && freshRoom.state !== "cancelled") {
+        await renderRoom(freshRoom);
+        return;
+      }
+    } catch (_) {}
+    await renderLobby(room, switchedRoom);
+  } else {
+    await renderLobby(room, switchedRoom);
   }
 }
 
@@ -1180,6 +1194,13 @@ function handleWsMessage(msg) {
       toast(msg.message, "error");
       safeRefreshRoom();
       break;
+    case "room_deleted":
+      toast(msg.message || "Game room was removed by an admin.", "info");
+      safeRefreshRoom();
+      break;
+    case "room_updated":
+      safeRefreshRoom();
+      break;
     case "round_terminated":
       toast(msg.message || "This round was ended by an admin.", "error");
       safeRefreshRoom();
@@ -1560,7 +1581,13 @@ async function main() {
     wireEvents();
     document.getElementById("top-bar").classList.remove("hidden");
     await Promise.all([refreshWallet(), loadPrefs()]);
-    await switchToTrackSelect();
+    const urlParams = new URLSearchParams(window.location.search);
+    const trackParam = urlParams.get("track") || (TRACK_ORDER.length === 1 ? TRACK_ORDER[0] : null);
+    if (trackParam && TRACK_META[trackParam]) {
+      await selectTrack(trackParam);
+    } else {
+      await switchToTrackSelect();
+    }
     startPolling();
     setInterval(refreshWallet, 8000);
   } catch (e) {

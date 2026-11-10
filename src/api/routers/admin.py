@@ -882,7 +882,7 @@ async def admin_list_games(limit: int = 50, state: Optional[str] = None, admin_i
             "pattern": room.pattern,
             "cards_per_player": room.cards_per_player,
             "min_players_to_start": room.min_players_to_start,
-            "min_cartelas_to_start": getattr(room, "min_cartelas_to_start", 2),
+            "min_cartelas_to_start": int(getattr(room, "min_cartelas_to_start", None) or 1),
             "countdown_seconds": room.countdown_seconds,
             "countdown_started_at": room.countdown_started_at.isoformat() if room.countdown_started_at else None,
             "draw_interval": room.draw_interval,
@@ -988,8 +988,7 @@ async def admin_force_start_game(
 ):
     """Start a waiting lobby now instead of waiting for its countdown.
 
-    Uses the normal start path: every cartela is charged, anyone who cannot pay is dropped, and the
-    lobby's minimum-cartelas rule still applies."""
+    Charges held cartelas immediately and allows starting even with a single player if requested."""
     reason = ((payload or {}).get("reason") or "").strip() or "Started early by admin"
     svc = get_room_service()
     try:
@@ -999,10 +998,13 @@ async def admin_force_start_game(
     if room.state != "waiting":
         raise HTTPException(status_code=400, detail=f"Only a waiting lobby can be started (current state: {room.state})")
 
+    if not room.taken_cartelas:
+        raise HTTPException(status_code=400, detail="Cannot start an empty lobby: at least 1 cartela must be selected.")
+
     from src.api.main import start_round_and_announce
 
     try:
-        started, dropped = await start_round_and_announce(room_id)
+        started, dropped = await start_round_and_announce(room_id, force=True)
     except InvalidStateError:
         raise HTTPException(status_code=409, detail="The round already started")
     if started is None:
@@ -1010,10 +1012,9 @@ async def admin_force_start_game(
             await _audit(request, requester, "game.force_start", target_type="game", target_id=room_id,
                          summary=f"{reason} - nobody could be charged, lobby reset")
             raise HTTPException(status_code=409, detail="Nobody could be charged, so the lobby was reset")
-        needed = int(getattr(room, "min_cartelas_to_start", 2) or 2)
         raise HTTPException(
             status_code=400,
-            detail=f"Not enough cartelas to start: {len(room.taken_cartelas or [])} held, {needed} needed",
+            detail="Could not start the round. Please verify players have sufficient balance.",
         )
 
     logger.warning("Admin %s force-started room %s: %s", requester, room_id, reason)
@@ -1029,29 +1030,207 @@ async def admin_force_start_game(
     }
 
 
+@router.get("/games/{room_id}")
+async def admin_get_game(
+    room_id: str,
+    admin_id: str = Depends(require_admin_dep),
+):
+    """Get full raw details and every stat of a single game room."""
+    svc = get_room_service()
+    try:
+        room = await svc.get_room(room_id)
+    except RoomNotFoundError:
+        raise HTTPException(status_code=404, detail="Game not found")
+    cards = await svc.cards.list_by_room(room_id)
+    cards_detail = [
+        {
+            "id": c.id,
+            "owner_id": c.owner_id,
+            "cartela_number": c.cartela_number,
+            "funded_by": c.funded_by,
+            "created_at": c.created_at.isoformat() if hasattr(c, "created_at") and c.created_at else None,
+        }
+        for c in cards
+    ]
+    data = room.model_dump()
+    data["cards_count"] = len(cards_detail)
+    data["cards"] = cards_detail
+    return data
+
+
+@router.patch("/games/{room_id}")
+async def admin_update_game_stats(
+    room_id: str,
+    request: Request,
+    payload: dict = Body(...),
+    requester: str = Depends(require_perm("games.manage")),
+):
+    """Manage every stat and state of a game room from the admin panel."""
+    svc = get_room_service()
+    try:
+        room = await svc.get_room(room_id)
+    except RoomNotFoundError:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    allowed_fields = {
+        "state", "stake_amount", "min_cartelas_to_start", "min_players_to_start",
+        "countdown_seconds", "draw_interval", "cards_per_player", "cartela_min",
+        "cartela_max", "prize_pool", "prize_pool_real", "prize_pool_bonus",
+        "auto_draw", "track", "end_reason", "advanced",
+    }
+    updates = {}
+    for key, val in payload.items():
+        if key not in allowed_fields:
+            continue
+        if key == "state":
+            if val not in ("waiting", "running", "ended", "cancelled"):
+                raise HTTPException(status_code=400, detail=f"Invalid state '{val}'")
+            updates["state"] = val
+        elif key in ("stake_amount", "min_cartelas_to_start", "min_players_to_start", "countdown_seconds", "draw_interval", "cards_per_player"):
+            try:
+                num = int(val)
+                if num < 1:
+                    raise ValueError()
+                if key == "cards_per_player" and num > 4:
+                    raise HTTPException(status_code=400, detail="cards_per_player cannot exceed 4")
+                updates[key] = num
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail=f"'{key}' must be a positive integer")
+        elif key in ("cartela_min", "cartela_max", "prize_pool", "prize_pool_real", "prize_pool_bonus"):
+            try:
+                num = int(val)
+                if num < 0:
+                    raise ValueError()
+                updates[key] = num
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail=f"'{key}' must be a non-negative integer")
+        elif key in ("auto_draw", "advanced"):
+            updates[key] = bool(val)
+        elif key == "track":
+            if val not in RoomService.TRACKS:
+                raise HTTPException(status_code=400, detail=f"Invalid track '{val}'")
+            updates["track"] = val
+        elif key == "end_reason":
+            updates["end_reason"] = str(val) if val is not None else None
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields provided to update")
+
+    min_c = updates.get("cartela_min", room.cartela_min)
+    max_c = updates.get("cartela_max", room.cartela_max)
+    if min_c > max_c:
+        raise HTTPException(status_code=400, detail=f"cartela_min ({min_c}) cannot be greater than cartela_max ({max_c})")
+
+    await svc.rooms.update(room_id, updates)
+    updated_room = await svc.get_room(room_id)
+
+    # If min_cartelas_to_start was updated on a waiting room and threshold is reached, launch countdown
+    if updated_room.state == "waiting" and not updated_room.countdown_started_at:
+        min_needed = max(int(getattr(updated_room, "min_cartelas_to_start", 1) or 1), 1)
+        if len(updated_room.taken_cartelas) >= min_needed:
+            now = datetime.now(timezone.utc)
+            await svc.rooms.update(room_id, {"countdown_started_at": now})
+            updated_room.countdown_started_at = now
+            from src.api.main import lobby_countdown_task, _active_lobby_timers
+            if room_id not in _active_lobby_timers:
+                _active_lobby_timers.add(room_id)
+                asyncio.create_task(lobby_countdown_task(room_id))
+
+    # If state was set to running manually, launch draw loop
+    if updates.get("state") == "running" and room.state != "running":
+        from src.api.main import auto_draw_task, _active_draw_loops
+        if room_id not in _active_draw_loops:
+            _active_draw_loops.add(room_id)
+            asyncio.create_task(auto_draw_task(room_id))
+
+    await manager.broadcast(room_id, {
+        "type": "room_updated",
+        "room_id": room_id,
+        "changes": {k: str(v) if isinstance(v, datetime) else v for k, v in updates.items()},
+    })
+
+    changes_summary = ", ".join(f"{k}={v}" for k, v in updates.items())
+    logger.warning("Admin %s updated room %s stats: %s", requester, room_id, changes_summary)
+    await _audit(request, requester, "game.update_stats", target_type="game", target_id=room_id, summary=f"Updated stats: {changes_summary}")
+
+    return {
+        "success": True,
+        "room_id": updated_room.id,
+        "room": updated_room.model_dump(),
+        "updated_fields": list(updates.keys()),
+    }
+
+
 @router.delete("/games/{room_id}")
 async def admin_delete_game(
     room_id: str,
     request: Request,
     requester: str = Depends(require_perm("games.manage")),
 ):
+    svc = get_room_service()
     try:
-        room = await get_room_service().get_room(room_id)
+        room = await svc.get_room(room_id)
     except RoomNotFoundError:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    if room.state != "waiting":
+    if room.state not in ("waiting", "cancelled"):
         raise HTTPException(
             status_code=400,
-            detail=f"Only a waiting game room can be deleted (current state: {room.state})",
+            detail=f"Only a waiting or cancelled game room can be deleted from the database (current state: {room.state})",
         )
 
-    await get_room_service().rooms._execute("DELETE FROM cards WHERE room_id = $1", room_id)
-    await get_room_service().rooms._execute("DELETE FROM game_rooms WHERE id = $1", room_id)
+    # Permanently delete room and associated cards/claims/logs from DB
+    await svc.rooms.delete(room_id)
 
-    logger.warning("Admin %s deleted waiting room %s", requester, room_id)
-    await _audit(request, requester, "game.delete", target_type="game", target_id=room_id, summary="Deleted waiting room")
-    return {"success": True, "message": "Waiting room deleted successfully."}
+    # Discard active background timers
+    from src.api.main import _active_lobby_timers, _active_draw_loops, _active_bot_fills
+    _active_lobby_timers.discard(room_id)
+    _active_draw_loops.discard(room_id)
+    _active_bot_fills.discard(room_id)
+
+    # Broadcast to connected clients so UI does not hang
+    await manager.broadcast(room_id, {
+        "type": "room_deleted",
+        "room_id": room_id,
+        "message": "This game room was deleted from the database by an admin.",
+    })
+
+    # Ensure this track immediately has a fresh waiting room available
+    try:
+        await svc.get_or_create_waiting_session(room.track)
+    except Exception:
+        logger.exception("Failed to prepare next waiting session after deleting room %s", room_id)
+
+    logger.warning("Admin %s deleted waiting/cancelled room %s from DB", requester, room_id)
+    await _audit(request, requester, "game.delete", target_type="game", target_id=room_id, summary="Deleted room from DB")
+    return {"success": True, "message": "Game room and associated cards permanently deleted from the database."}
+
+
+@router.post("/games/clear-waiting")
+async def admin_clear_waiting_games(
+    request: Request,
+    payload: dict = Body(default={}),
+    requester: str = Depends(require_perm("games.manage")),
+):
+    """Permanently delete all waiting game rooms from the DB (optionally filtered by track)."""
+    track = (payload or {}).get("track")
+    svc = get_room_service()
+    deleted = await svc.rooms.delete_waiting_rooms(track=track)
+
+    from src.api.main import _active_lobby_timers, _active_bot_fills
+    _active_lobby_timers.clear()
+    _active_bot_fills.clear()
+
+    # Ensure a fresh waiting room exists for each track
+    for t in svc.TRACKS:
+        try:
+            await svc.get_or_create_waiting_session(t)
+        except Exception:
+            pass
+
+    logger.warning("Admin %s cleared %d waiting game room(s) from DB", requester, deleted)
+    await _audit(request, requester, "game.clear_waiting", target_type="game", summary=f"Deleted {deleted} waiting room(s) from DB")
+    return {"success": True, "deleted_count": deleted, "message": f"Successfully deleted {deleted} waiting game room(s) from the database."}
 
 
 @router.get("/report")

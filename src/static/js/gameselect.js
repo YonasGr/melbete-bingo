@@ -656,7 +656,7 @@ async function loadPaymentMethods() {
 // ---------------------------------------------------------------------
 // Game selection cards
 // ---------------------------------------------------------------------
-const GAME_ROUTES = { bingo: "/bingo" };
+const GAME_ROUTES = { bingo: "/bingo?track=real_10" };
 
 function wireGameCards() {
   document.querySelectorAll(".game-card[data-game]").forEach((card) => {

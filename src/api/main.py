@@ -183,7 +183,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": detail})
 
 
-APP_VERSION = "22"
+APP_VERSION = "23"
 
 
 class CacheStaticFiles(StaticFiles):
@@ -412,12 +412,12 @@ async def _lobby_countdown_inner(room_id: str, initial_wait: float | None = None
     await start_round_and_announce(room_id)
 
 
-async def start_round_and_announce(room_id: str):
+async def start_round_and_announce(room_id: str, force: bool = False):
     """Charge the lobby and start the round, tell the room what happened, and start the draw loop.
 
     Shared by the lobby countdown and the admin "start now" action so both behave identically.
     Returns (started_room, dropped_player_ids); started_room is None when nothing started."""
-    started_room, dropped = await get_room_service().charge_and_start(room_id)
+    started_room, dropped = await get_room_service().charge_and_start(room_id, force=force)
     if started_room is None and not dropped:
         return None, []  # lobby didn't have enough cartelas - stays open, no countdown running
 
@@ -483,11 +483,9 @@ async def auto_draw_task(room_id: str):
 
             try:
                 room_after = await get_room_service().get_room(room_id)
-                if multi_round is None and room_after.state == "running":
-                    multi_round = await get_room_service().is_multi_winner_round(room_id)
-                if multi_round and room_after.state == "running":
-                    # After every number, every player whose BINGO is completed by this same last
-                    # number wins together and shares the prize (any number of players).
+                if room_after.state == "running":
+                    # After every number, check if any player or bot has completed a winning
+                    # pattern: split equally among simultaneous winners, pay, and end the round.
                     ended = await get_room_service().settle_round_winners(room_id)
                     if ended is not None:
                         await manager.broadcast(room_id, {
