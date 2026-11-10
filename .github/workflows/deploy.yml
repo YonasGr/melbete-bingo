@@ -50,7 +50,7 @@ jobs:
   deploy:
     name: Deploy to shared AWS EC2 host
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arm64]
     environment: production
     env:
       EC2_HOST: ${{ secrets.EC2_HOST }}
