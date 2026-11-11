@@ -217,6 +217,13 @@ class AdminService:
         display_order: int = 0,
         method_id: Optional[str] = None,
     ) -> PaymentMethod:
+        key = (key or "").strip()
+        name = (name or "").strip()
+        account_info = (account_info or "").strip()
+        if isinstance(account_holder, str):
+            account_holder = account_holder.strip() or None
+        if isinstance(instructions, str):
+            instructions = instructions.strip() or None
         if method_id:
             existing = await self.payments.get(method_id)
         else:

@@ -13,7 +13,16 @@ class PaymentMethodRepository(BaseRepository):
         return PaymentMethod(**row) if row else None
 
     async def get_by_key(self, key: str) -> Optional[PaymentMethod]:
+        cleaned = (key or "").strip()
+        if not cleaned:
+            return None
         row = await self._fetchrow("SELECT * FROM payment_methods WHERE key = $1", key)
+        if not row:
+            row = await self._fetchrow(
+                "SELECT * FROM payment_methods WHERE TRIM(LOWER(key)) = TRIM(LOWER($1)) "
+                "ORDER BY display_order ASC LIMIT 1",
+                cleaned,
+            )
         return PaymentMethod(**row) if row else None
 
     async def create(self, method: PaymentMethod) -> PaymentMethod:

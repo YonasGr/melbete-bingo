@@ -522,18 +522,95 @@ function buildQuickPreviewPanel(room, card, count, cap) {
 // open; during a running round / the short results window they are shown read-only (taken ones marked) and
 // become tappable on their own as soon as the next round's lobby opens.
 let quickPickerTimer = null;
+let quickPickerTickTimer = null;
 let quickPickerOpen = null; // whether the last render had a tappable lobby
+let quickPickerRoom = null;
+let quickPickerClockOffsetMs = 0; // Date.parse(room.server_time) - Date.now()
+let quickPickerCountdownEndRoomId = null;
+let quickPickerCountdownEndTimer = null;
+
+function liveSecondsLeft(room) {
+  if (!room?.countdown_started_at) return null;
+  const serverNowMs = Date.now() + quickPickerClockOffsetMs;
+  const left = room.countdown_seconds - (serverNowMs - Date.parse(room.countdown_started_at)) / 1000;
+  return Math.max(0, Math.ceil(left));
+}
+
+function formatQuickPickerStatus(room, sec) {
+  if (!room) return { text: "", cls: "" };
+  if (room.state === "running") {
+    const calledCount = Array.isArray(room.called_numbers) ? room.called_numbers.length : 0;
+    return { text: `Round live · ${calledCount} called`, cls: "is-live" };
+  }
+  if (room.state !== "waiting") return { text: "Next round opening shortly...", cls: "" };
+  if (room.countdown_started_at && sec != null) {
+    if (sec <= 0) return { text: "Starting round...", cls: "is-hot" };
+    if (sec <= 5) return { text: `Starts in ${sec}s`, cls: "is-hot" };
+    return { text: `Starts in ${sec}s`, cls: "is-live" };
+  }
+  const picked = (room.taken_cartelas || []).length;
+  const minNeed = Number(room.min_cartelas_to_start || 0);
+  if (minNeed > picked) return { text: `Pick ${minNeed - picked} more to start countdown`, cls: "" };
+  return { text: "Picking open", cls: "" };
+}
+
+function updateQuickPickerCountdownDOM() {
+  const room = quickPickerRoom;
+  const sub = document.getElementById("qp-sub");
+  const barCd = document.getElementById("qp-bar-cd");
+  if (!room) return;
+  const sec = liveSecondsLeft(room);
+  const { text, cls } = formatQuickPickerStatus(room, sec);
+  if (sub) {
+    sub.textContent = text;
+    sub.className = cls ? `qp-sub ${cls}` : "qp-sub";
+  }
+  if (barCd) {
+    if (room.state === "waiting" && room.countdown_started_at && sec != null) {
+      barCd.textContent = sec > 0 ? `${sec}s` : "Starting...";
+      barCd.classList.remove("hidden");
+    } else {
+      barCd.textContent = "";
+      barCd.classList.add("hidden");
+    }
+  }
+  if (room.state === "waiting" && room.countdown_started_at && sec === 0 && quickPickerCountdownEndRoomId !== room.id) {
+    quickPickerCountdownEndRoomId = room.id;
+    clearTimeout(quickPickerCountdownEndTimer);
+    // Wait ~1s after countdown ends so the backend finishes starting the round before jumping.
+    quickPickerCountdownEndTimer = setTimeout(() => {
+      if (!document.hidden) {
+        refreshRejoinBanner();
+        renderCartelaPicker();
+      }
+    }, 1050);
+  }
+}
+
+function ensureQuickPickerTicker() {
+  if (quickPickerTickTimer) return;
+  quickPickerTickTimer = setInterval(() => {
+    if (!document.hidden && quickPickerRoom) updateQuickPickerCountdownDOM();
+  }, 1000);
+}
 
 function scheduleQuickPicker() {
   clearTimeout(quickPickerTimer);
-  quickPickerTimer = setTimeout(renderCartelaPicker, quickPickerOpen ? 10000 : 3000);
+  let delay = quickPickerOpen ? 10000 : 3000;
+  if (quickPickerOpen && quickPickerRoom) {
+    const sec = liveSecondsLeft(quickPickerRoom);
+    if (sec !== null && sec <= 2) delay = 1000;
+    else if (sec !== null && sec <= 10) delay = 2000;
+    else if (quickCards.size > 0) delay = 5000;
+  }
+  quickPickerTimer = setTimeout(renderCartelaPicker, delay);
 }
 
 // No active lobby: keep the picker on screen, greyed out, until the next round opens.
 let pickerRange = { min: 1, max: 1000 };   // last cartela range seen, so the greyed-out grid matches the real one
 
 function renderPickerWaiting(box) {
-  quickCards = new Map(); quickRoomId = null; quickPickerOpen = false;
+  quickCards = new Map(); quickRoomId = null; quickPickerOpen = false; quickPickerRoom = null;
   const grid = document.createElement("div");
   grid.className = "qp-grid";
   for (let n = pickerRange.min; n <= pickerRange.max; n++) {
@@ -556,9 +633,18 @@ async function renderCartelaPicker() {
     const room = Object.values(lobby)[0];
     if (!room) { renderPickerWaiting(box); scheduleQuickPicker(); return; }
     box.classList.remove("hidden", "waiting");
+    const prevRoomState = quickPickerRoom && quickPickerRoom.id === room.id ? quickPickerRoom.state : null;
     const open = room.state === "waiting";
     quickPickerOpen = open;
-    if (room.id !== quickRoomId) { quickRoomId = room.id; quickCards = new Map(); quickPreviewNo = null; }
+    quickPickerRoom = room;
+    const parsedServer = Date.parse(room.server_time);
+    quickPickerClockOffsetMs = Number.isFinite(parsedServer) ? parsedServer - Date.now() : 0;
+    if (room.id !== quickRoomId) {
+      quickRoomId = room.id;
+      quickCards = new Map();
+      quickPreviewNo = null;
+      quickPickerCountdownEndRoomId = null;
+    }
 
     // Cartelas this player already holds in the open lobby count towards the 1-4 limit.
     let mine = [];
@@ -577,6 +663,14 @@ async function renderCartelaPicker() {
 
     const head = document.createElement("div");
     head.className = "qp-head";
+    const info = document.createElement("div");
+    info.className = "qp-info";
+    const title = document.createElement("h2");
+    title.textContent = `Bingo · ${room.stake_amount} ETB`;
+    const sub = document.createElement("p");
+    sub.id = "qp-sub";
+    sub.className = "qp-sub";
+    info.append(title, sub);
 
     const free = [];
     for (let n = min; n <= max; n++) if (!taken.has(n)) free.push(n);
@@ -587,7 +681,7 @@ async function renderCartelaPicker() {
       if (!free.length || remaining === 0) return;
       reserveQuickCartela(room, free[Math.floor(Math.random() * free.length)]);
     });
-    head.appendChild(random);
+    head.append(info, random);
 
     const legend = document.createElement("p");
     legend.className = "qp-legend";
@@ -634,16 +728,24 @@ async function renderCartelaPicker() {
       bar.className = "qp-bar";
       const text = document.createElement("span");
       text.textContent = `${mine.length} of ${maxCards} reserved - ${mine.length * room.stake_amount} ETB`;
+      const barCd = document.createElement("span");
+      barCd.id = "qp-bar-cd";
+      barCd.className = "qp-bar-cd hidden";
       const view = document.createElement("button");
       view.type = "button"; view.className = "qp-random"; view.textContent = "Open room";
       view.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
-      bar.append(text, view);
+      bar.append(text, barCd, view);
       parts.push(bar);
     }
     const y = window.scrollY;
     box.replaceChildren(...parts);
     window.scrollTo(0, y);
     document.body.classList.add("has-quick-picker");
+    updateQuickPickerCountdownDOM();
+    ensureQuickPickerTicker();
+    if (prevRoomState === "waiting" && room.state === "running") {
+      setTimeout(() => { if (!document.hidden) refreshRejoinBanner(); }, 400);
+    }
   } catch (e) { box.classList.add("hidden"); document.body.classList.remove("has-quick-picker"); /* optional - never block the hub */ }
   scheduleQuickPicker();
 }
@@ -671,6 +773,30 @@ function wireGameCards() {
 // ---------------------------------------------------------------------
 // Deposit modal
 // ---------------------------------------------------------------------
+function normMethodKey(key) {
+  return String(key || "").trim().toLowerCase();
+}
+
+function findPaymentMethod(key) {
+  if (!key) return null;
+  const exact = state.paymentMethods.find((m) => m.key === key);
+  if (exact) return exact;
+  const nk = normMethodKey(key);
+  return nk ? state.paymentMethods.find((m) => normMethodKey(m.key) === nk) : null;
+}
+
+function findWithdrawAccount(key) {
+  if (!key || !state.withdrawAccounts) return "";
+  if (Object.prototype.hasOwnProperty.call(state.withdrawAccounts, key)) {
+    return state.withdrawAccounts[key] || "";
+  }
+  const nk = normMethodKey(key);
+  for (const [k, v] of Object.entries(state.withdrawAccounts)) {
+    if (normMethodKey(k) === nk) return v || "";
+  }
+  return "";
+}
+
 function getMethodLogo(method) {
   const key = (method?.key || "").toLowerCase();
   const name = (method?.name || "").toLowerCase();
@@ -746,6 +872,7 @@ async function openDepositModal() {
   }
   const list = document.getElementById("deposit-methods");
   list.innerHTML = "";
+  state.selectedDepositMethod = null;
   const methods = state.paymentMethods.filter((m) => m.supports_deposit);
 
   if (methods.length === 0) {
@@ -756,8 +883,9 @@ async function openDepositModal() {
   } else {
     const groups = {};
     methods.forEach((m) => {
-      if (!groups[m.name]) groups[m.name] = [];
-      groups[m.name].push(m);
+      const label = (m.name || "").trim() || (m.key || "").trim();
+      if (!groups[label]) groups[label] = [];
+      groups[label].push(m);
     });
 
     Object.keys(groups).sort().forEach((name) => {
@@ -774,7 +902,9 @@ async function openDepositModal() {
       list.appendChild(btn);
     });
   }
-  document.getElementById("deposit-account-info").classList.add("hidden");
+  const depInfoBox = document.getElementById("deposit-account-info");
+  depInfoBox.classList.add("hidden");
+  depInfoBox.style.display = "";
   document.getElementById("deposit-amount").value = "";
   if (document.getElementById("deposit-sms-text")) {
     const smsEl = document.getElementById("deposit-sms-text");
@@ -792,18 +922,20 @@ async function openDepositModal() {
 }
 
 function selectDepositMethod(key) {
-  state.selectedDepositMethod = key;
-  const method = state.paymentMethods.find((m) => m.key === key);
+  const method = findPaymentMethod(key);
+  state.selectedDepositMethod = method ? method.key : key;
   const box = document.getElementById("deposit-account-info");
   if (method) {
+    const cleanName = (method.name || "").trim() || (method.key || "").trim();
     box.innerHTML = "";
+    box.style.display = "";
 
     const logoUrl = getMethodLogo(method);
     if (logoUrl) {
       const img = document.createElement("img");
       img.className = "account-info-logo";
       img.src = logoUrl;
-      img.alt = method.name;
+      img.alt = cleanName;
       box.appendChild(img);
     }
 
@@ -812,7 +944,7 @@ function selectDepositMethod(key) {
 
     const nameStrong = document.createElement("span");
     nameStrong.className = "account-info-name";
-    nameStrong.textContent = method.name;
+    nameStrong.textContent = cleanName;
     body.appendChild(nameStrong);
 
     const row1 = document.createElement("div");
@@ -961,6 +1093,7 @@ async function openWithdrawModal() {
   }
   const list = document.getElementById("withdraw-methods");
   list.innerHTML = "";
+  state.selectedWithdrawMethod = null;
   const methods = state.paymentMethods.filter((m) => m.supports_withdrawal);
 
   if (methods.length === 0) {
@@ -970,7 +1103,8 @@ async function openWithdrawModal() {
     list.appendChild(p);
   } else {
     methods.forEach((m) => {
-      const btn = buildMethodCard(m, m.name, () => {
+      const label = (m.name || "").trim() || (m.key || "").trim();
+      const btn = buildMethodCard(m, label, () => {
         document.querySelectorAll("#withdraw-methods .method-card").forEach((b) => b.classList.remove("selected"));
         btn.classList.add("selected");
         selectWithdrawMethod(m.key);
@@ -978,6 +1112,8 @@ async function openWithdrawModal() {
       list.appendChild(btn);
     });
   }
+  document.getElementById("withdraw-address").value = "";
+  document.getElementById("withdraw-method-name").textContent = mbT("wd_account", { name: mbT("wd_account_default") });
   document.getElementById("withdraw-address-step").classList.remove("hidden");
   document.getElementById("withdraw-form-step").classList.add("hidden");
   try {
@@ -998,10 +1134,11 @@ async function openWithdrawModal() {
 }
 
 function selectWithdrawMethod(key) {
-  state.selectedWithdrawMethod = key;
-  const method = state.paymentMethods.find((m) => m.key === key);
-  document.getElementById("withdraw-method-name").textContent = mbT("wd_account", { name: method?.name || mbT("wd_account_default") });
-  const existing = state.withdrawAccounts[key];
+  const method = findPaymentMethod(key);
+  state.selectedWithdrawMethod = method ? method.key : key;
+  const label = (method?.name || "").trim() || mbT("wd_account_default");
+  document.getElementById("withdraw-method-name").textContent = mbT("wd_account", { name: label });
+  const existing = findWithdrawAccount(state.selectedWithdrawMethod) || findWithdrawAccount(key);
   document.getElementById("withdraw-address").value = existing || "";
   document.getElementById("withdraw-form-step").classList.toggle("hidden", !existing);
 }
@@ -1011,11 +1148,15 @@ async function saveWithdrawAddress() {
   const address = document.getElementById("withdraw-address").value.trim();
   if (!address) return toast(mbT("tt_need_address"), "error");
   try {
-    await api(`/api/wallet/${state.playerId}/withdrawal-accounts`, {
+    const res = await api(`/api/wallet/${state.playerId}/withdrawal-accounts`, {
       method: "POST",
       body: JSON.stringify({ method_key: state.selectedWithdrawMethod, address }),
     });
-    state.withdrawAccounts[state.selectedWithdrawMethod] = address;
+    if (res && res.accounts) {
+      state.withdrawAccounts = res.accounts;
+    } else {
+      state.withdrawAccounts[state.selectedWithdrawMethod] = address;
+    }
     document.getElementById("withdraw-form-step").classList.remove("hidden");
     toast(mbT("tt_addr_saved"), "success");
   } catch (e) {
@@ -1687,19 +1828,19 @@ function wireEvents() {
 }
 
 // Deep links from the bingo room footer: /app#deposit, #withdraw, #refer, #profile.
-function openFromHash() {
+async function openFromHash() {
   const action = (location.hash || "").replace("#", "");
   const map = {
-    deposit: () => { setHubTab("deposit"); openDepositModal(); },
-    withdraw: () => { setHubTab("withdraw"); openWithdrawModal(); },
-    refer: () => { setHubTab("refer"); openReferralModal(); },
+    deposit: () => { setHubTab("deposit"); return openDepositModal(); },
+    withdraw: () => { setHubTab("withdraw"); return openWithdrawModal(); },
+    refer: () => { setHubTab("refer"); return openReferralModal(); },
     profile: () => { setHubTab("profile"); openProfileDrawer(); },
     promos: () => openPromoModal(),
     cashback: () => openPromoModal("cashback"),
   };
   if (map[action]) {
     try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* ignore */ }
-    map[action]();
+    await map[action]();
   }
 }
 
@@ -1730,9 +1871,10 @@ async function main() {
       state.supportContact = "@melbete_support_1";
     }
     showView("game-select-view");
-    openFromHash();
+    await openFromHash();
     renderPromoBanner();
     renderCartelaPicker();
+    refreshRejoinBanner();
     setInterval(refreshWallet, 8000);
     refreshPromoBadge();
     setInterval(refreshPromoBadge, 60000);
@@ -1909,7 +2051,97 @@ async function appendLeaderboardCard(list) {
 // ---------------------------------------------------------------------
 // Hub strips: "return to your round" and the leaderboard campaign.
 // ---------------------------------------------------------------------
+const AUTO_ENTER_ROUND_KEY = "melbete_auto_entered_round";
 let rejoinTimer = null;
+let pendingAutoEnterRoomId = null;
+let autoEnterWatcherStarted = false;
+let autoEnterResumeTimer = null;
+let autoEnterChecking = false;
+
+function hasAutoEnteredRound(roomId) {
+  if (!roomId) return false;
+  try {
+    return sessionStorage.getItem(AUTO_ENTER_ROUND_KEY) === String(roomId);
+  } catch (e) {
+    return false;
+  }
+}
+
+function markAutoEnteredRound(roomId) {
+  if (!roomId) return;
+  try {
+    sessionStorage.setItem(AUTO_ENTER_ROUND_KEY, String(roomId));
+  } catch (e) { /* ignore */ }
+}
+
+function hasBlockingFormOrDrawer() {
+  if (document.querySelector(".modal:not(.hidden), .modal-overlay:not(.hidden)")) return true;
+  if (document.getElementById("profile-drawer")?.classList.contains("open")) return true;
+  if (document.querySelector("#cartela-preview-sheet:not(.hidden)")) return true;
+  if (document.querySelector("#inbox-sheet:not(.hidden)")) return true;
+  const ob = document.getElementById("mb-onboard");
+  if (ob && !ob.classList.contains("hidden") && getComputedStyle(ob).display !== "none") return true;
+  return false;
+}
+
+function navigateToRunningRound(roomId) {
+  pendingAutoEnterRoomId = null;
+  markAutoEnteredRound(roomId);
+  window.location.href = GAME_ROUTES.bingo;
+}
+
+async function checkAndResumePendingAutoEnter() {
+  if (!pendingAutoEnterRoomId || autoEnterChecking || document.hidden || !state.playerId) return;
+  if (hasBlockingFormOrDrawer()) return;
+  autoEnterChecking = true;
+  try {
+    const { round } = await api(`/api/my-round/${encodeURIComponent(state.playerId)}`);
+    if (!round) {
+      pendingAutoEnterRoomId = null;
+      const el = document.getElementById("rejoin-banner");
+      if (el) {
+        el.classList.add("hidden");
+        delete el.dataset.roomId;
+      }
+      return;
+    }
+    if (hasBlockingFormOrDrawer() || document.hidden) {
+      pendingAutoEnterRoomId = round.room_id;
+      return;
+    }
+    if (!hasAutoEnteredRound(round.room_id)) {
+      navigateToRunningRound(round.room_id);
+      return;
+    }
+    pendingAutoEnterRoomId = null;
+  } catch (e) {
+    /* keep pendingAutoEnterRoomId so next poll or overlay change can retry */
+  } finally {
+    autoEnterChecking = false;
+  }
+}
+
+function initAutoEnterWatcher() {
+  if (autoEnterWatcherStarted) return;
+  autoEnterWatcherStarted = true;
+  const observer = new MutationObserver(() => {
+    if (!pendingAutoEnterRoomId || document.hidden || hasBlockingFormOrDrawer()) return;
+    clearTimeout(autoEnterResumeTimer);
+    autoEnterResumeTimer = setTimeout(() => { checkAndResumePendingAutoEnter(); }, 120);
+  });
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "style"],
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshRejoinBanner();
+  });
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) refreshRejoinBanner();
+  });
+}
 
 async function refreshRejoinBanner() {
   clearTimeout(rejoinTimer);
@@ -1919,6 +2151,7 @@ async function refreshRejoinBanner() {
     if (!document.hidden) {
       const { round } = await api(`/api/my-round/${encodeURIComponent(state.playerId)}`);
       if (round) {
+        el.dataset.roomId = String(round.room_id || "");
         el.replaceChildren();
         const dot = document.createElement("i"); dot.className = "rj-dot"; dot.setAttribute("aria-hidden", "true");
         const text = document.createElement("span"); text.className = "rj-text";
@@ -1926,12 +2159,34 @@ async function refreshRejoinBanner() {
         const go = document.createElement("strong"); go.textContent = "Return ›";
         el.append(dot, text, go);
         el.classList.remove("hidden");
+
+        if (round.room_id && !hasAutoEnteredRound(round.room_id)) {
+          if (hasBlockingFormOrDrawer()) {
+            pendingAutoEnterRoomId = round.room_id;
+          } else {
+            navigateToRunningRound(round.room_id);
+            return;
+          }
+        }
       } else {
+        pendingAutoEnterRoomId = null;
+        delete el.dataset.roomId;
         el.classList.add("hidden");
       }
     }
   } catch (e) { /* keep whatever is on screen */ }
-  rejoinTimer = setTimeout(refreshRejoinBanner, 8000);
+  let pollDelay = 5000;
+  if (quickPickerRoom && quickPickerRoom.state === "waiting" && quickPickerRoom.countdown_started_at && quickCards.size > 0) {
+    const startMs = Date.parse(quickPickerRoom.countdown_started_at);
+    if (Number.isFinite(startMs)) {
+      const endMs = startMs + (Number(quickPickerRoom.countdown_seconds) || 30) * 1000;
+      const msPastZero = (Date.now() + quickPickerClockOffsetMs) - endMs;
+      if (msPastZero >= 0 && msPastZero < 6000) {
+        pollDelay = 1000;
+      }
+    }
+  }
+  rejoinTimer = setTimeout(refreshRejoinBanner, pollDelay);
 }
 
 let lbStripTimer = null;
@@ -1971,9 +2226,14 @@ async function refreshLeaderboardStrip() {
   lbStripTimer = setTimeout(refreshLeaderboardStrip, 60000);
 }
 
-document.getElementById("rejoin-banner")?.addEventListener("click", () => { window.location.href = GAME_ROUTES.bingo; });
+document.getElementById("rejoin-banner")?.addEventListener("click", (e) => {
+  const roomId = e.currentTarget?.dataset?.roomId;
+  if (roomId) markAutoEnteredRound(roomId);
+  window.location.href = GAME_ROUTES.bingo;
+});
 document.getElementById("lb-strip")?.addEventListener("click", () => openPromoModal("leaderboard"));
-setTimeout(() => { refreshRejoinBanner(); refreshLeaderboardStrip(); setInterval(paintLeaderboardStrip, 15000); }, 1500);
+initAutoEnterWatcher();
+setTimeout(() => { refreshLeaderboardStrip(); setInterval(paintLeaderboardStrip, 15000); }, 1500);
 
 
 // ---------------------------------------------------------------------

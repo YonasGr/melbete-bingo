@@ -1557,6 +1557,11 @@ function wireEvents() {
   // Wallet/profile (deposit, withdraw, history, referral, Telegram linking)
   // lives only on the /app hub - see gameselect.js.
   document.getElementById("game-select-btn")?.addEventListener("click", () => {
+    try {
+      if (state.room?.id && state.room?.state === "running") {
+        sessionStorage.setItem("melbete_auto_entered_round", state.room.id);
+      }
+    } catch (e) { /* storage may be blocked */ }
     window.location.href = "/app";
   });
 

@@ -94,7 +94,7 @@ async def request_deposit(
 
 async def _submit_deposit(player_id: str, payload: dict) -> dict:
     amount = payload.get("amount")
-    payment_method = payload.get("payment_method")
+    payment_method = str(payload.get("payment_method") or "").strip()
     sms_text = payload.get("sms_text")
     screenshot_base64 = payload.get("screenshot_base64")
 
@@ -134,6 +134,22 @@ async def _submit_deposit(player_id: str, payload: dict) -> dict:
     return {"message": "Deposit request submitted - awaiting admin approval", "transaction_id": txn.id, "amount": amount}
 
 
+def _find_withdrawal_address(accounts: dict | None, *keys: str) -> str | None:
+    """Look up a saved withdrawal address by exact key first, then trimmed case-insensitive key."""
+    if not accounts:
+        return None
+    for k in keys:
+        if k and accounts.get(k):
+            return accounts[k]
+    targets = {k.strip().lower() for k in keys if k and k.strip()}
+    if not targets:
+        return None
+    for k, v in accounts.items():
+        if v and str(k).strip().lower() in targets:
+            return v
+    return None
+
+
 @router.get("/api/wallet/{player_id}/withdrawal-accounts")
 async def get_withdrawal_accounts(
     player_id: str,
@@ -151,8 +167,8 @@ async def set_withdrawal_account(
     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
 ):
     await _require_player_identity(player_id, x_telegram_init_data)
-    method_key = payload.get("method_key")
-    address = payload.get("address")
+    method_key = str(payload.get("method_key") or "").strip()
+    address = str(payload.get("address") or "").strip()
     if not method_key or not address:
         raise HTTPException(status_code=400, detail="method_key and address are required")
     player_repo = PlayerRepository()
@@ -162,8 +178,12 @@ async def set_withdrawal_account(
     method = await PaymentMethodRepository().get_by_key(method_key)
     if not method or not method.active or not method.supports_withdrawal:
         raise HTTPException(status_code=400, detail="Choose an active withdrawal payment method")
-    await player_repo.set_withdrawal_account(player_id, method_key, address)
-    return {"message": "Withdrawal address saved"}
+    canonical_key = method.key.strip()
+    await player_repo.set_withdrawal_account(player_id, canonical_key, address)
+    if method.key != canonical_key:
+        await player_repo.set_withdrawal_account(player_id, method.key, address)
+    updated = await player_repo.get_by_id(player_id)
+    return {"message": "Withdrawal address saved", "method_key": canonical_key, "accounts": updated.withdrawal_accounts if updated else {}}
 
 
 @router.post("/api/wallet/{player_id}/withdraw")
@@ -183,8 +203,8 @@ async def request_withdrawal(
 
 async def _submit_withdrawal(player_id: str, payload: dict) -> dict:
     amount = payload.get("amount")
-    payment_method = payload.get("payment_method")
-    legal_name = payload.get("legal_name")
+    payment_method = str(payload.get("payment_method") or "").strip()
+    legal_name = str(payload.get("legal_name") or "").strip()
     if amount is None or not payment_method or not legal_name:
         raise HTTPException(status_code=400, detail="amount, payment_method and legal_name are required")
     try:
@@ -193,15 +213,16 @@ async def _submit_withdrawal(player_id: str, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="amount must be a number")
 
     player = await PlayerRepository().get_by_id(player_id)
-    address = (player.withdrawal_accounts or {}).get(payment_method) if player else None
     method = await PaymentMethodRepository().get_by_key(payment_method)
     if not method or not method.active or not method.supports_withdrawal:
         raise HTTPException(status_code=400, detail="Choose an active withdrawal payment method")
+    canonical_key = method.key.strip()
+    address = _find_withdrawal_address(player.withdrawal_accounts if player else None, payment_method, method.key, canonical_key)
     if not address:
-        raise HTTPException(status_code=400, detail=f"Set your {payment_method} withdrawal address first")
+        raise HTTPException(status_code=400, detail=f"Set your {(method.name or canonical_key).strip()} withdrawal address first")
 
     try:
-        txn = await get_wallet_service().request_withdrawal(player_id, amount, payment_method, legal_name, address)
+        txn = await get_wallet_service().request_withdrawal(player_id, amount, canonical_key, legal_name, address)
     except WithdrawalAddressMissingError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except InvalidAmountError as e:

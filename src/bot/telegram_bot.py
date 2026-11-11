@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 # Ethiopian mobile numbers: optional +251/251 country code or a leading 0,
 # followed by 9 digits (e.g. 0912345678, 251912345678, +251912345678).
 _PHONE_RE = re.compile(r"^(?:\+?251|0)?[97]\d{8}$")
+_BANK_ACCOUNT_RE = re.compile(r"^\d{8,18}$")
 
 
 def _is_valid_phone_number(text: str) -> bool:
@@ -60,6 +61,35 @@ def _is_valid_phone_number(text: str) -> bool:
     Rejects plain text or garbage input."""
     cleaned = re.sub(r"[\s\-]", "", text)
     return bool(_PHONE_RE.match(cleaned))
+
+
+def _allows_bank_account(method_key: Optional[str], method_name: Optional[str] = None) -> bool:
+    """True when the payment channel accepts numeric bank account numbers (e.g. CBE)."""
+    combined = f"{method_key or ''} {method_name or ''}".lower()
+    return "cbe" in combined or "bank" in combined
+
+
+def _is_valid_withdrawal_address(
+    text: str, method_key: Optional[str] = None, method_name: Optional[str] = None
+) -> bool:
+    """True for an Ethiopian mobile number, or a numeric bank account on bank/CBE channels."""
+    if _is_valid_phone_number(text):
+        return True
+    if _allows_bank_account(method_key, method_name):
+        cleaned = re.sub(r"[\s\-]", "", text)
+        return bool(_BANK_ACCOUNT_RE.match(cleaned))
+    return False
+
+
+def _match_method_by_key(methods, key: Optional[str]):
+    """Match a payment method by exact key first, then trimmed case-insensitive key."""
+    target = (key or "").strip().lower()
+    if not target:
+        return None
+    return next((m for m in methods if m.key == key), None) or next(
+        (m for m in methods if (m.key or "").strip().lower() == target),
+        None,
+    )
 
 
 class MelbeteBingoBot:
@@ -662,27 +692,36 @@ class MelbeteBingoBot:
             context.user_data["withdraw_state"] = "awaiting_address"
             method_key = context.user_data.get("withdraw_method")
             methods = await self.admin_service.list_payment_methods(active_only=True)
-            method = next((m for m in methods if m.key == method_key), None)
-            method_name = method.name if method else "ክፍያ"
+            method = _match_method_by_key(methods, method_key)
+            method_name = (method.name.strip() if method and method.name else None) or "ክፍያ"
+            if _allows_bank_account(method_key, method_name):
+                prompt = f"🏦 ገንዘቡ እንዲላክልዎት የሚፈልጉትን *የ{method_name} ስልክ ቁጥር ወይም አካውንት ቁጥር* ያስገቡ፦"
+            else:
+                prompt = f"📱 ገንዘቡ እንዲላክልዎት የሚፈልጉትን *የ{method_name} ስልክ ቁጥር* ያስገቡ፦"
             await update.message.reply_text(
-                f"📱 ገንዘቡ እንዲላክልዎት የሚፈልጉትን *የ{method_name} ስልክ ቁጥር* ያስገቡ፦",
+                prompt,
                 parse_mode="Markdown",
             )
             return
 
         # Step 2: waiting for withdrawal phone number / address
         if context.user_data.get("withdraw_state") == "awaiting_address":
-            if not _is_valid_phone_number(text):
-                await update.message.reply_text(
-                    "⚠️ እባክዎ ትክክለኛ የስልክ ቁጥር ብቻ ያስገቡ (ለምሳሌ 09XXXXXXXX)። ፊደላት ወይም ሌላ ጽሁፍ መያዝ የለበትም።"
-                )
+            method_key = context.user_data.get("withdraw_method")
+            methods = await self.admin_service.list_payment_methods(active_only=True)
+            method = _match_method_by_key(methods, method_key)
+            method_name = (method.name.strip() if method and method.name else None) or "ክፍያ"
+            if not _is_valid_withdrawal_address(text, method_key, method_name):
+                if _allows_bank_account(method_key, method_name):
+                    await update.message.reply_text(
+                        "⚠️ እባክዎ ትክክለኛ የስልክ ቁጥር (ለምሳሌ 09XXXXXXXX) ወይም የባንክ አካውንት ቁጥር ያስገቡ።"
+                    )
+                else:
+                    await update.message.reply_text(
+                        "⚠️ እባክዎ ትክክለኛ የስልክ ቁጥር ብቻ ያስገቡ (ለምሳሌ 09XXXXXXXX)። ፊደላት ወይም ሌላ ጽሁፍ መያዝ የለበትም።"
+                    )
                 return
             context.user_data["withdraw_address"] = re.sub(r"[\s\-]", "", text)
             context.user_data["withdraw_state"] = "awaiting_legal_name"
-            method_key = context.user_data.get("withdraw_method")
-            methods = await self.admin_service.list_payment_methods(active_only=True)
-            method = next((m for m in methods if m.key == method_key), None)
-            method_name = method.name if method else "ክፍያ"
             await update.message.reply_text(
                 f"👤 አመሰግናለሁ! አሁን ደግሞ በ*{method_name}* ላይ የተመዘገበውን *ትክክለኛ ስም* (ልክ እንዳለው) ያስገቡ፦",
                 parse_mode="Markdown",
@@ -705,11 +744,12 @@ class MelbeteBingoBot:
             address = context.user_data.get("withdraw_address")
             legal_name = text
             methods = await self.admin_service.list_payment_methods(active_only=True)
-            method = next((m for m in methods if m.key == method_key), None)
-            method_name = method.name if method else method_key
+            method = _match_method_by_key(methods, method_key)
+            method_name = (method.name.strip() if method and method.name else None) or method_key
+            canonical_key = method.key if method else method_key
 
             try:
-                txn = await self.wallets.request_withdrawal(player.id, amount, method_key, legal_name, address)
+                txn = await self.wallets.request_withdrawal(player.id, amount, canonical_key, legal_name, address)
                 await update.message.reply_text(
                     f"✅ የ*{amount} ብር* የገንዘብ ማውጣት ጥያቄ ገብቷል!\n\n"
                     f"በአስተዳደር ግምገማ ከተደረገ በኋላ ወደ {method_name} ቁጥርዎ ይላካል፦ `{address}`",
@@ -781,10 +821,11 @@ class MelbeteBingoBot:
         methods = await self.admin_service.list_payment_methods(active_only=True)
         methods = [m for m in methods if m.supports_deposit]
 
-        # Group by name
+        # Group by trimmed name so trailing spaces don't split identical channels
         groups = {}
         for m in methods:
-            groups.setdefault(m.name, []).append(m)
+            gname = (m.name or "").strip() or m.key.strip()
+            groups.setdefault(gname, []).append(m)
 
         if not groups:
             await message.reply_text("በአሁኑ ጊዜ ምንም የገንዘብ ማስገቢያ መንገድ አልተዘጋጀም።")
@@ -792,7 +833,8 @@ class MelbeteBingoBot:
 
         keyboard = []
         for name in sorted(groups.keys()):
-            keyboard.append([InlineKeyboardButton(name, callback_data=f"topup_group_{name}")])
+            cb = f"topup_group_{name}".encode("utf-8")[:64].decode("utf-8", errors="ignore")
+            keyboard.append([InlineKeyboardButton(name, callback_data=cb)])
 
         s = await self.admin_service.get_settings()
         await message.reply_text(
@@ -837,7 +879,7 @@ class MelbeteBingoBot:
         # A withdrawal destination belongs to the player, not to an admin's
         # receiving account. Present each configured payment method directly;
         # do not expose account holders as a second "provider" choice.
-        keyboard = [[InlineKeyboardButton(m.name, callback_data=f"withdraw_method_{m.key}")] for m in methods]
+        keyboard = [[InlineKeyboardButton((m.name or "").strip() or m.key.strip(), callback_data=f"withdraw_method_{m.key.strip()}")] for m in methods]
 
         await message.reply_text(
             f"🏧 *ማሸነፊያ ገንዘብ ማውጣት*\n\n"
@@ -1279,44 +1321,58 @@ Good luck! 🍀
         elif data == "referral":
             await self.referral_command(query, context)
         elif data.startswith("topup_group_"):
-            name = data.replace("topup_group_", "")
+            name = data.replace("topup_group_", "", 1).strip()
             methods = await self.admin_service.list_payment_methods(active_only=True)
-            group = [m for m in methods if m.name == name and m.supports_deposit]
+            group = [
+                m for m in methods
+                if ((m.name or "").strip().lower() == name.lower() or (m.key or "").strip().lower() == name.lower())
+                and m.supports_deposit
+            ]
 
+            if not group:
+                await query.answer("This payment method is currently unavailable.", show_alert=True)
+                return
             if len(group) == 1:
                 await self._show_topup_details(query, group[0], context)
             else:
-                keyboard = [[InlineKeyboardButton(f"{m.account_holder} ({m.account_info})", callback_data=f"topup_method_{m.key}")] for m in group]
+                keyboard = [
+                    [InlineKeyboardButton(f"{m.account_holder or m.name} ({m.account_info})", callback_data=f"topup_method_{m.key.strip()}")]
+                    for m in group
+                ]
                 await query.message.reply_text(
                     f"💳 *{name}* - ገንዘቡን የሚልኩበትን አካውንት ይምረጡ፦",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
         elif data.startswith("topup_method_"):
-            method_key = data.replace("topup_method_", "")
+            method_key = data.replace("topup_method_", "", 1).strip()
             methods = await self.admin_service.list_payment_methods(active_only=True)
-            method = next((m for m in methods if m.key == method_key), None)
+            method = _match_method_by_key([m for m in methods if m.supports_deposit], method_key)
             if method:
                 await self._show_topup_details(query, method, context)
+            else:
+                await query.answer("This payment method is currently unavailable.", show_alert=True)
 
         elif data.startswith("withdraw_method_"):
-            method_key = data.replace("withdraw_method_", "")
+            method_key = data.replace("withdraw_method_", "", 1).strip()
             methods = await self.admin_service.list_payment_methods(active_only=True)
-            method = next((m for m in methods if m.key == method_key and m.supports_withdrawal), None)
+            method = _match_method_by_key([m for m in methods if m.supports_withdrawal], method_key)
             if method:
                 await self._start_withdraw_flow(query, method, context)
+            else:
+                await query.answer("This withdrawal method is currently unavailable.", show_alert=True)
 
     async def _show_topup_details(self, query, method, context):
         s = await self.admin_service.get_settings()
-        context.user_data["topup_method"] = method.key
+        context.user_data["topup_method"] = method.key.strip()
         context.user_data["topup_state"] = "awaiting_amount"
 
-        details = f"👤 ስም: *{method.account_holder or 'N/A'}*\n📱 ስልክ ቁጥር: `{method.account_info}`"
+        details = f"👤 ስም: *{method.account_holder or 'N/A'}*\n📱 ቁጥር / አካውንት: `{method.account_info}`"
         if method.instructions:
             details += f"\n📝 {method.instructions}"
 
         await query.message.reply_text(
-            f"💳 *{method.name}*\n\n{details}\n\n"
+            f"💳 *{(method.name or '').strip() or method.key.strip()}*\n\n{details}\n\n"
             f"1️⃣ ገንዘቡን ከላይ ወዳለው ቁጥር ይላኩ (ቁጥሩን ነክተው መቅዳት ይችላሉ)።\n"
             f"2️⃣ ከዚያ በኋላ የላኩትን *የብር መጠን* ይጻፉ "
             f"(ዝቅተኛ {s.min_deposit}, ከፍተኛ {s.max_deposit} ብር)፦",
@@ -1324,12 +1380,12 @@ Good luck! 🍀
         )
 
     async def _start_withdraw_flow(self, query, method, context):
-        context.user_data["withdraw_method"] = method.key
+        context.user_data["withdraw_method"] = method.key.strip()
         context.user_data["withdraw_state"] = "awaiting_amount"
         s = await self.admin_service.get_settings()
 
         await query.message.reply_text(
-            f"🏧 *በ{method.name} ገንዘብ ማውጣት*\n\n"
+            f"🏧 *በ{(method.name or '').strip() or method.key.strip()} ገንዘብ ማውጣት*\n\n"
             f"ማውጣት የሚፈልጉትን *የብር መጠን* ያስገቡ "
             f"(ዝቅተኛ {s.min_withdrawal}, ከፍተኛ {s.max_withdrawal} ብር)፦",
             parse_mode="Markdown"

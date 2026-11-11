@@ -122,9 +122,15 @@
 .profile-drawer-footer { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .85rem 1.25rem calc(.85rem + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); background: var(--surface); }
 .profile-drawer-footer .pdf-label { font-size: .9rem; font-weight: 700; color: var(--ink); }
 
-/* Picker header: only "Pick for me", moved up and stretched across the freed space */
-.quick-picker .qp-head { margin-bottom: 8px; }
-.quick-picker .qp-head .qp-random { width: 100%; }
+/* Picker header: compact room/countdown info beside "Pick for me" */
+.quick-picker .qp-head { margin-bottom: 10px; align-items: center; gap: 10px; }
+.quick-picker .qp-head .qp-info { min-width: 0; flex: 1; }
+.quick-picker .qp-head .qp-info h2 { margin: 0; font-size: 1.05rem; line-height: 1.2; }
+.quick-picker .qp-head .qp-sub { margin: 3px 0 0; font-size: .82rem; font-weight: 700; color: var(--melbete-ink-2, #B3AEA2); font-variant-numeric: tabular-nums; }
+.quick-picker .qp-head .qp-sub.is-live { color: var(--melbete-gold, #FFC933); }
+.quick-picker .qp-head .qp-sub.is-hot { color: #F87171; }
+.quick-picker .qp-head .qp-random { width: auto; flex: none; white-space: nowrap; }
+.qp-bar-cd { margin-left: auto; font-weight: 800; font-size: .8rem; color: var(--melbete-gold, #FFC933); font-variant-numeric: tabular-nums; }
 
 /* Cartela preview shown inline, on top of the list */
 .qp-preview { margin: 0 0 10px; padding: 10px; border-radius: 16px; border: 1px solid rgb(255 201 51 / .4); background: rgb(255 201 51 / .06); }

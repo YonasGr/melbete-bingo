@@ -13,6 +13,16 @@
   const tag = (node, steps) => { if (node) node.dataset.pf = steps; return node; };
   const labelFor = (id) => document.querySelector(`label[for="${id}"]`);
   const REF_RE = /https?:\/\/\S+|\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{8,14}\b/;
+  const normKey = (k) => String(k || "").trim().toLowerCase();
+  const findSavedAcct = (accounts, key) => {
+    if (!accounts || !key) return "";
+    if (accounts[key]) return accounts[key];
+    const nk = normKey(key);
+    for (const k of Object.keys(accounts)) {
+      if (normKey(k) === nk && accounts[k]) return accounts[k];
+    }
+    return "";
+  };
 
   // ------------------------------------------------------------------ generic step engine
   function buildShell(flow) {
@@ -226,7 +236,11 @@
     const s = String(a || "").replace(/\s+/g, "");
     return s.length >= 8 ? `${s.slice(0, 2)}•• ••• ${s.slice(-3)}` : s;
   }
-  function wdMethod() { return (state.paymentMethods || []).find((m) => m.key === state.selectedWithdrawMethod); }
+  function wdMethod() {
+    const k = state.selectedWithdrawMethod;
+    return (state.paymentMethods || []).find((m) => m.key === k)
+      || (state.paymentMethods || []).find((m) => normKey(m.key) === normKey(k));
+  }
   function wdAmount() { return Number($("withdraw-amount")?.value) || 0; }
   function wdAmountError() {
     const a = wdAmount(), max = withdrawableOf(state.wallet), lim = state.withdrawLimits;
@@ -239,7 +253,7 @@
 
   function renderAccount() {
     const key = state.selectedWithdrawMethod;
-    const saved = key && state.withdrawAccounts ? state.withdrawAccounts[key] : "";
+    const saved = findSavedAcct(state.withdrawAccounts, key);
     const showCard = !!saved && !wd.changing;
     wd.card.classList.toggle("hidden", !showCard);
     $("withdraw-address-step").classList.toggle("hidden", !key || showCard);
@@ -247,15 +261,15 @@
     wd.name.classList.toggle("hidden", !key);
     if (showCard) {
       const m = wdMethod();
-      wd.cardText.textContent = `${m ? m.name : ""} · ${maskAccount(saved)}`;
+      wd.cardText.textContent = `${m ? (m.name || "").trim() : ""} · ${maskAccount(saved)}`;
     }
   }
 
   function renderReview() {
     const key = state.selectedWithdrawMethod, m = wdMethod();
-    const saved = (state.withdrawAccounts && state.withdrawAccounts[key]) || $("withdraw-address").value.trim();
+    const saved = findSavedAcct(state.withdrawAccounts, key) || $("withdraw-address").value.trim();
     wd.rv.innerHTML = "";
-    [["pf_rv_amount", `${fmt(wdAmount())} ${t("chip_etb")}`], ["pf_rv_method", m ? m.name : "-"], ["pf_rv_account", maskAccount(saved) || "-"], ["pf_rv_name", wd.name.value.trim() || "-"]]
+    [["pf_rv_amount", `${fmt(wdAmount())} ${t("chip_etb")}`], ["pf_rv_method", m ? (m.name || "").trim() : "-"], ["pf_rv_account", maskAccount(saved) || "-"], ["pf_rv_name", wd.name.value.trim() || "-"]]
       .forEach(([k, v]) => { const d = el("div"); d.append(el("dt", "", t(k)), el("dd", "", v)); wd.rv.appendChild(d); });
     wd.rvNote.textContent = t("pf_rv_note");
   }
@@ -315,14 +329,14 @@
       if (step === 1) {
         const key = state.selectedWithdrawMethod;
         if (!key) return { msg: t("pf_err_method") };
-        const saved = (state.withdrawAccounts && state.withdrawAccounts[key]) || "";
+        const saved = findSavedAcct(state.withdrawAccounts, key);
         const typed = $("withdraw-address").value.trim();
         const addrNow = wd.changing || !saved ? typed : saved;
         if (!addrNow) return { msg: t("pf_err_addr") };
         if (!wd.name.value.trim()) return { msg: t("pf_err_name") };
         if (addrNow !== saved) {
           await saveWithdrawAddress();
-          if (!(state.withdrawAccounts && state.withdrawAccounts[key] === addrNow)) return { stay: true };
+          if (findSavedAcct(state.withdrawAccounts, key) !== addrNow) return { stay: true };
           wd.changing = false; renderAccount();
         }
       }
@@ -340,7 +354,7 @@
     wd.changing = false;
     // Pre-pick the method the player already has a saved account for.
     const list = (state.paymentMethods || []).filter((m) => m.supports_withdrawal);
-    const idx = list.findIndex((m) => state.withdrawAccounts && state.withdrawAccounts[m.key]);
+    const idx = list.findIndex((m) => !!findSavedAcct(state.withdrawAccounts, m.key));
     if (idx >= 0) $("withdraw-methods").querySelectorAll(".method-card")[idx]?.click();
     $("withdraw-amount").value = "";
     go(wd, 0);

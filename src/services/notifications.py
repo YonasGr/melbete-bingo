@@ -82,9 +82,9 @@ async def _payment_method_name(key: Optional[str]) -> str:
         return "N/A"
     try:
         method = await PaymentMethodRepository().get_by_key(key)
-        return method.name if method else key
+        return (method.name or key).strip() if method else key.strip()
     except Exception:  # noqa: BLE001
-        return key
+        return key.strip()
 
 
 async def _send(
